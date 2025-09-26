@@ -24,6 +24,7 @@ def validate_text_length(client, text, max_tokens=32000):
         st.error(f"خطا در شمارش توکن‌ها: {e}")
         # در صورت خطا، تخمین تقریبی
         estimated_tokens = len(text) / 4
+        st.warning("شمارش توکن‌ها تقریبی است (۴ کاراکتر ≈ ۱ توکن).")
         return estimated_tokens <= max_tokens, estimated_tokens
 
 # 🎭 تابع تولید رونوشت خودکار
@@ -76,6 +77,7 @@ with st.sidebar:
     - حداکثر ۳۲,۰۰۰ توکن در هر درخواست
     - فقط ورودی متنی پشتیبانی می‌شود
     - حداکثر ۲ بلندگو در حالت چندبلندگو
+    - مدل‌های TTS در حالت پیش‌نمایش هستند و ممکن است ناپایدار باشند
     """)
     st.subheader("🌐 زبان")
     st.info("زبان به‌صورت خودکار تشخیص داده می‌شود، اما می‌توانید زبان خاصی را انتخاب کنید.")
@@ -95,19 +97,28 @@ if api_key:
             mode = st.radio("🎭 حالت گفتار:", ["تک‌بلندگو", "چندبلندگو"])
 
         with col2:
-            default_style = st.selectbox(
-                "🎨 سبک پیش‌فرض:",
-                ["عادی", "شاد", "غمگین", "هیجان‌زده", "رسمی", "دوستانه", "دراماتیک"]
+            tts_model = st.selectbox(
+                "🤖 مدل TTS:",
+                ["gemini-2.5-flash-preview-tts", "gemini-2.5-pro-preview-tts"],
+                help="مدل‌های TTS در حالت پیش‌نمایش هستند."
             )
 
         with col3:
             speech_rate = st.slider("🎤 سرعت گفتار:", 0.5, 2.0, 1.0, 0.1)
 
         # 🌐 انتخاب زبان (اختیاری)
+        language_options = {
+            "تشخیص خودکار": None,
+            "فارسی": "fa-IR",
+            "انگلیسی": "en-US",
+            "عربی": "ar-EG",
+            "فرانسوی": "fr-FR",
+            "اسپانیایی": "es-US"
+        }
         language = st.selectbox(
             "🌐 زبان (اختیاری - پیش‌فرض: تشخیص خودکار):",
-            ["تشخیص خودکار", "فارسی", "انگلیسی", "عربی", "فرانسوی", "اسپانیایی"],
-            help="زبان به‌صورت خودکار تشخیص داده می‌شود، اما می‌توانید انتخاب کنید."
+            list(language_options.keys()),
+            help="زبان به‌صورت خودکار تشخیص داده می‌شود، اما می‌توانید کد BCP-47 خاصی را انتخاب کنید."
         )
 
         # 🎤 بخش تولید رونوشت خودکار
@@ -157,13 +168,13 @@ if api_key:
                 "📝 متن مورد نظر:",
                 value=st.session_state.generated_transcript,
                 height=200,
-                placeholder=f"مثال: با لحن {default_style}: متن شما..."
+                placeholder="مثال: با لحن شاد: متن شما..."
             )
         else:
             text_input = st.text_area(
                 "📝 متن مورد نظر:",
                 height=200,
-                placeholder=f"مثال: با لحن {default_style}: متن شما... یا برای چندبلندگو از قالب بالا استفاده کنید"
+                placeholder="مثال: با لحن شاد: متن شما... یا برای چندبلندگو از قالب بالا استفاده کنید"
             )
 
         # 🔊 لیست کامل گزینه‌های صوتی
@@ -205,7 +216,7 @@ if api_key:
             with col2:
                 style_instruction = st.text_input(
                     "🎭 دستور سبک (اختیاری):",
-                    placeholder=f"مثال: با لحن {default_style} بگو"
+                    placeholder="مثال: با لحن شاد بگو"
                 )
 
         else:
@@ -258,14 +269,14 @@ if api_key:
                 with st.spinner("🔮 در حال تولید صدا..."):
                     processed_text = text_input
                     if language != "تشخیص خودکار":
-                        processed_text = f"زبان {language}: {text_input}"
+                        processed_text = f"Language {language_options[language]}: {text_input}"
 
                     if mode == "تک‌بلندگو":
                         if style_instruction:
                             processed_text = f"{style_instruction}: {text_input}"
 
                         response = client.models.generate_content(
-                            model="gemini-2.5-flash-native-audio",  # مدل TTS به‌روز
+                            model=tts_model,
                             contents=processed_text,
                             config=types.GenerateContentConfig(
                                 response_modalities=["AUDIO"],
@@ -291,7 +302,7 @@ if api_key:
                             processed_text = style_prefix + processed_text
 
                         response = client.models.generate_content(
-                            model="gemini-2.5-flash-native-audio",
+                            model=tts_model,
                             contents=processed_text,
                             config=types.GenerateContentConfig(
                                 response_modalities=["AUDIO"],
@@ -355,9 +366,9 @@ if api_key:
             except Exception as e:
                 st.error(f"❌ خطا در تولید صدا: {e}")
                 if "404" in str(e):
-                    st.error("مدل TTS در دسترس نیست. لطفاً کلید API یا دسترسی به مدل gemini-2.5-flash-native-audio را بررسی کنید.")
+                    st.error(f"مدل {tts_model} در دسترس نیست. لطفاً کلید API یا دسترسی به مدل را بررسی کنید.")
                 else:
-                    st.info("💡 ممکن است کلید API نامعتبر باشد یا سرویس دچار مشکل شده باشد.")
+                    st.info("💡 ممکن است کلید API نامعتبر باشد یا سرویس دچار مشکل شده باشد. مدل‌های TTS در حالت پیش‌نمایش هستند.")
 
         # 📚 بخش نمونه‌های آماده
         st.header("🎭 نمونه‌های آماده")
