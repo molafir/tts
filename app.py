@@ -1,6 +1,6 @@
 import streamlit as st
 import wave
-from google.cloud import genai
+import google.generativeai as genai
 from google.cloud.genai import types
 
 # 🎵 تابع ذخیره wav
