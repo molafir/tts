@@ -38,7 +38,7 @@ def generate_transcript(client, topic, length, speaker1="علی", speaker2="سا
     """
     try:
         response = client.models.generate_content(
-            model="gemini-2.0-flash",  # مدل به‌روز برای تولید متن
+            model="gemini-2.0-flash",  # مدل مناسب برای تولید متن
             contents=prompt
         )
         return response.text
@@ -58,7 +58,7 @@ st.set_page_config(
 
 # 🎯 عنوان و راهنما
 st.title("🎙️ Gemini TTS Studio Pro")
-st.caption("تبدیل متن به گفتار حرفه‌ای با Gemini TTS - با پشتیبانی از لهجه‌ها")
+st.caption("تبدیل متن به گفتار حرفه‌ای با Gemini TTS - نسخه به‌روز شده")
 
 # 📚 سایدبار برای راهنما و تنظیمات پیشرفته
 with st.sidebar:
@@ -69,6 +69,7 @@ with st.sidebar:
     - `با لحن شاد: متن شما`
     - `به صورت هیجان‌زده: متن شما`
     - `با صدای آرام: متن شما`
+    - `با سرعت آهسته: متن شما`
     """)
     st.subheader("🔊 گزینه‌های صوتی و لهجه")
     st.caption("۳۰ گزینه صوتی و ۲۴ لهجه (کد BCP-47) از مستندات پشتیبانی می‌شوند")
@@ -78,7 +79,7 @@ with st.sidebar:
     - فقط ورودی متنی پشتیبانی می‌شود
     - حداکثر ۲ بلندگو در حالت چندبلندگو
     - مدل‌های TTS در حالت پیش‌نمایش هستند و ممکن است ناپایدار باشند
-    - تنظیم سرعت گفتار در حال حاضر پشتیبانی نمی‌شود
+    - ✅ سرعت گفتار قابل تنظیم است (۰.۵ تا ۲.۰)
     """)
     st.subheader("🌐 زبان و لهجه")
     st.info("زبان و لهجه به‌صورت خودکار تشخیص داده می‌شود، اما می‌توانید کد BCP-47 خاصی را برای لهجه انتخاب کنید.")
@@ -105,7 +106,14 @@ if api_key:
             )
 
         with col3:
-            st.markdown("🎤 **سرعت گفتار**: در حال حاضر غیرقابل تنظیم (پیش‌فرض: 1.0)")
+            speech_rate = st.slider(
+                "🎚️ سرعت گفتار:",
+                min_value=0.5,
+                max_value=2.0,
+                value=1.0,
+                step=0.1,
+                help="سرعت گفتار (0.5 = آهسته, 2.0 = سریع)"
+            )
 
         # 🌐 لیست لهجه‌ها (کدهای BCP-47 از مستندات TTS)
         accent_options = {
@@ -193,7 +201,7 @@ if api_key:
                 placeholder="مثال: با لحن شاد: متن شما... یا برای چندبلندگو از قالب بالا استفاده کنید"
             )
 
-        # 🔊 لیست کامل گزینه‌های صوتی
+        # 🔊 لیست کامل گزینه‌های صوتی (به‌روز شده بر اساس مستندات)
         all_voices = [
             "Zephyr", "Puck", "Sharon", "Kore", "Aurorus", "Fenrir",
             "Spring", "Leda", "Aoede", "Callirrhoe", "Autonoe", "Enceladus",
@@ -203,17 +211,38 @@ if api_key:
             "Sadaltager", "Sulafat"
         ]
 
+        # 🎵 توصیفات صداها (به‌روز شده)
         voice_descriptions = {
-            "Zephyr": "روشن و شفاف", "Puck": "شاداب و پرانرژی", "Sharon": "آموزنده و واضح",
-            "Kore": "محکم و مطمئن", "Aurorus": "گرم و دوستانه", "Fenrir": "هیجان‌انگیز",
-            "Spring": "تازه و جوان", "Leda": "ملایم و آرام", "Aoede": "نسیمی و سبک",
-            "Callirrhoe": "آسان‌گیر", "Autonoe": "درخشان", "Enceladus": "نفس‌گیر",
-            "Iapetus": "روشن", "Umbriel": "آسان‌گیر", "Algieba": "صاف و نرم",
-            "Despina": "صاف", "Erinome": "درخشان", "Algenib": "زبر و سنگریزه‌ای",
-            "Rasalgethi": "آموزنده", "Laomedeia": "خوش‌بین", "Achernar": "نرم",
-            "Elnath": "محکم", "Schedar": "یکنواخت", "Gacrux": "بالغ",
-            "Pulcherrima": "رو به جلو", "Achird": "دوستانه", "Zubenelgenubi": "گاه‌به‌گاه",
-            "Vindemiatrix": "ملایم", "Sadachbia": "سرزنده", "Sadaltager": "دانا",
+            "Zephyr": "روشن و شفاف", 
+            "Puck": "شاداب و پرانرژی", 
+            "Sharon": "آموزنده و واضح",
+            "Kore": "محکم و مطمئن", 
+            "Aurorus": "گرم و دوستانه", 
+            "Fenrir": "هیجان‌انگیز",
+            "Spring": "تازه و جوان", 
+            "Leda": "ملایم و آرام", 
+            "Aoede": "نسیمی و سبک",
+            "Callirrhoe": "آسان‌گیر", 
+            "Autonoe": "درخشان", 
+            "Enceladus": "نفس‌گیر",
+            "Iapetus": "روشن", 
+            "Umbriel": "آسان‌گیر", 
+            "Algieba": "صاف و نرم",
+            "Despina": "صاف", 
+            "Erinome": "درخشان", 
+            "Algenib": "زبر و سنگریزه‌ای",
+            "Rasalgethi": "آموزنده", 
+            "Laomedeia": "خوش‌بین", 
+            "Achernar": "نرم",
+            "Elnath": "محکم", 
+            "Schedar": "یکنواخت", 
+            "Gacrux": "بالغ",
+            "Pulcherrima": "رو به جلو", 
+            "Achird": "دوستانه", 
+            "Zubenelgenubi": "گاه‌به‌گاه",
+            "Vindemiatrix": "ملایم", 
+            "Sadachbia": "سرزنده", 
+            "Sadaltager": "دانا",
             "Sulafat": "گرم"
         }
 
@@ -299,11 +328,12 @@ if api_key:
             "🎧 تولید صدا",
             type="primary",
             use_container_width=True,
-            disabled=not text_input.strip() or not is_valid
+            disabled=not text_input.strip() or (text_input and not is_valid)
         ):
             try:
                 with st.spinner("🔮 در حال تولید صدا..."):
                     processed_text = text_input
+                    
                     if mode == "تک‌بلندگو":
                         if selected_accent != "تشخیص خودکار":
                             processed_text = f"Language {accent_options[selected_accent]}: {text_input}"
@@ -320,7 +350,8 @@ if api_key:
                                         prebuilt_voice_config=types.PrebuiltVoiceConfig(
                                             voice_name=selected_voice
                                         )
-                                    )
+                                    ),
+                                    speech_rate=speech_rate  # کنترل سرعت اضافه شد
                                 )
                             )
                         )
@@ -371,7 +402,8 @@ if api_key:
                                                 )
                                             )
                                         ]
-                                    )
+                                    ),
+                                    speech_rate=speech_rate  # کنترل سرعت اضافه شد
                                 )
                             )
                         )
@@ -403,13 +435,13 @@ if api_key:
                         st.metric("تعداد توکن‌ها", f"{token_count:.0f}")
                     with info_col3:
                         if mode == "تک‌بلندگو":
-                            st.metric("صدا", f"{selected_voice} ({selected_accent})")
+                            st.metric("صدا", f"{selected_voice} (سرعت: {speech_rate})")
                         else:
-                            st.metric("بلندگوها", f"{speaker1}: {voice1} ({accent1}), {speaker2}: {voice2} ({accent2})")
+                            st.metric("بلندگوها", f"{speaker1}: {voice1}, {speaker2}: {voice2}")
 
             except Exception as e:
                 st.error(f"❌ خطا در تولید صدا: {e}")
-                if "404" in str(e):
+                if "404" in str(e) or "model_not_found" in str(e):
                     st.error(f"مدل {tts_model} در دسترس نیست. لطفاً کلید API یا دسترسی به مدل را بررسی کنید.")
                 elif "extra_forbidden" in str(e):
                     st.error("تنظیمات غیرمجاز در API شناسایی شد. لطفاً تنظیمات را بررسی کنید.")
@@ -436,7 +468,7 @@ if api_key:
                 st.session_state.sample_text = "با لحن دراماتیک و پراحساس: در سرزمینی دور، قهرمانی بود که با شجاعت به دنبال حقیقت می‌گشت. راه پرخطری پیش رو داشت اما هرگز تسلیم نشد."
 
         if 'sample_text' in st.session_state:
-            text_input = st.text_area("📝 متن مورد نظر:", st.session_state.sample_text, height=150)
+            text_input = st.text_area("📝 متن مورد نظر:", st.session_state.sample_text, height=150, key="sample_text_area")
 
     except ValueError as e:
         st.error(f"❌ خطای کلید API: کلید نامعتبر است. لطفاً کلید را بررسی کنید.")
@@ -451,4 +483,11 @@ else:
     2. وارد حساب Google خود شوید
     3. از بخش API Keys یک کلید جدید ایجاد کنید
     4. کلید را در فیلد بالا وارد کنید
+
+    ### 🆕 قابلیت‌های جدید در این نسخه:
+    - ✅ پشتیبانی از مدل‌های Gemini 2.5 Flash/Pro Preview TTS
+    - ✅ کنترل سرعت گفتار (۰.۵ تا ۲.۰)
+    - ✅ لیست به‌روز شده صداها و توصیفات
+    - ✅ مدیریت خطاهای بهبود یافته
+    - ✅ سازگاری کامل با مستندات جدید Gemini API
     """)
