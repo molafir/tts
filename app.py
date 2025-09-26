@@ -1,7 +1,7 @@
 import streamlit as st
 import wave
 import google.generativeai as genai
-from google.cloud.genai import types
+from google.generativeai import types
 
 # 🎵 تابع ذخیره wav
 def save_wave(filename, pcm, channels=1, rate=24000, sample_width=2):
