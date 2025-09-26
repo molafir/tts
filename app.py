@@ -78,6 +78,7 @@ with st.sidebar:
     - فقط ورودی متنی پشتیبانی می‌شود
     - حداکثر ۲ بلندگو در حالت چندبلندگو
     - مدل‌های TTS در حالت پیش‌نمایش هستند و ممکن است ناپایدار باشند
+    - تنظیم سرعت گفتار در حال حاضر پشتیبانی نمی‌شود
     """)
     st.subheader("🌐 زبان و لهجه")
     st.info("زبان و لهجه به‌صورت خودکار تشخیص داده می‌شود، اما می‌توانید کد BCP-47 خاصی را برای لهجه انتخاب کنید.")
@@ -104,7 +105,7 @@ if api_key:
             )
 
         with col3:
-            speech_rate = st.slider("🎤 سرعت گفتار:", 0.5, 2.0, 1.0, 0.1)
+            st.markdown("🎤 **سرعت گفتار**: در حال حاضر غیرقابل تنظیم (پیش‌فرض: 1.0)")
 
         # 🌐 لیست لهجه‌ها (کدهای BCP-47 از مستندات TTS)
         accent_options = {
@@ -319,8 +320,7 @@ if api_key:
                                         prebuilt_voice_config=types.PrebuiltVoiceConfig(
                                             voice_name=selected_voice
                                         )
-                                    ),
-                                    rate=speech_rate
+                                    )
                                 )
                             )
                         )
@@ -364,15 +364,14 @@ if api_key:
                                             ),
                                             types.SpeakerVoiceConfig(
                                                 speaker=speaker2,
-                                                voice_config=types.Voic
+                                                voice_config=types.VoiceConfig(
                                                     prebuilt_voice_config=types.PrebuiltVoiceConfig(
                                                         voice_name=voice2
                                                     )
                                                 )
                                             )
                                         ]
-                                    ),
-                                    rate=speech_rate
+                                    )
                                 )
                             )
                         )
@@ -412,6 +411,8 @@ if api_key:
                 st.error(f"❌ خطا در تولید صدا: {e}")
                 if "404" in str(e):
                     st.error(f"مدل {tts_model} در دسترس نیست. لطفاً کلید API یا دسترسی به مدل را بررسی کنید.")
+                elif "extra_forbidden" in str(e):
+                    st.error("تنظیمات غیرمجاز در API شناسایی شد. لطفاً تنظیمات را بررسی کنید.")
                 else:
                     st.info("💡 ممکن است کلید API نامعتبر باشد یا سرویس دچار مشکل شده باشد. مدل‌های TTS در حالت پیش‌نمایش هستند.")
 
