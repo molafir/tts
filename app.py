@@ -38,7 +38,7 @@ def generate_transcript(client, topic, length, speaker1="علی", speaker2="سا
     """
     try:
         response = client.models.generate_content(
-            model="gemini-2.0-flash",  # مدل مناسب برای تولید متن
+            model="gemini-2.0-flash",
             contents=prompt
         )
         return response.text
@@ -58,7 +58,7 @@ st.set_page_config(
 
 # 🎯 عنوان و راهنما
 st.title("🎙️ Gemini TTS Studio Pro")
-st.caption("تبدیل متن به گفتار حرفه‌ای با Gemini TTS - نسخه به‌روز شده")
+st.caption("تبدیل متن به گفتار حرفه‌ای با Gemini TTS - نسخه به‌روز شده بر اساس مستندات رسمی")
 
 # 📚 سایدبار برای راهنما و تنظیمات پیشرفته
 with st.sidebar:
@@ -66,11 +66,12 @@ with st.sidebar:
     st.subheader("📖 دستورات سبک گفتار")
     st.info("""
     **برای کنترل سبک از این قالب‌ها استفاده کنید:**
-    - `با لحن شاد: متن شما`
-    - `به صورت هیجان‌زده: متن شما`
-    - `با صدای آرام: متن شما`
-    - `با سرعت آهسته: متن شما`
-    - `با سرعت سریع: متن شما`
+    - `Say cheerfully: متن شما`
+    - `Say in an excited voice: متن شما`
+    - `Say slowly: متن شما`
+    - `Say at a moderate pace: متن شما`
+    - `Say quickly: متن شما`
+    - `Make speaker1 sound tired and bored: متن شما`
     """)
     st.subheader("🔊 گزینه‌های صوتی و لهجه")
     st.caption("۳۰ گزینه صوتی و ۲۴ لهجه (کد BCP-47) از مستندات پشتیبانی می‌شوند")
@@ -79,8 +80,8 @@ with st.sidebar:
     - حداکثر ۳۲,۰۰۰ توکن در هر درخواست
     - فقط ورودی متنی پشتیبانی می‌شود
     - حداکثر ۲ بلندگو در حالت چندبلندگو
-    - مدل‌های TTS در حالت پیش‌نمایش هستند و ممکن است ناپایدار باشند
-    - ✅ سرعت گفتار از طریق دستورات متنی قابل کنترل است
+    - مدل‌های TTS در حالت پیش‌نمایش هستند
+    - سرعت گفتار از طریق دستورات متنی قابل کنترل است
     """)
     st.subheader("🌐 زبان و لهجه")
     st.info("زبان و لهجه به‌صورت خودکار تشخیص داده می‌شود، اما می‌توانید کد BCP-47 خاصی را برای لهجه انتخاب کنید.")
@@ -103,7 +104,7 @@ if api_key:
             tts_model = st.selectbox(
                 "🤖 مدل TTS:",
                 ["gemini-2.5-flash-preview-tts", "gemini-2.5-pro-preview-tts"],
-                help="مدل‌های TTS در حالت پیش‌نمایش هستند و ممکن است ناپایدار باشند."
+                help="مدل‌های TTS در حالت پیش‌نمایش هستند."
             )
 
         with col3:
@@ -113,42 +114,48 @@ if api_key:
                 help="سرعت گفتار از طریق دستورات متنی کنترل می‌شود"
             )
             
-            # نگاشت سرعت به دستورات متنی
+            # نگاشت سرعت به دستورات متنی مطابق مستندات
             speed_commands = {
                 "پیش‌فرض": "",
-                "آهسته": "با سرعت آهسته",
-                "متوسط": "با سرعت متوسط", 
-                "سریع": "با سرعت سریع"
+                "آهسته": "Say slowly",
+                "متوسط": "Say at a moderate pace", 
+                "سریع": "Say quickly"
             }
 
-        # 🌐 لیست لهجه‌ها (کدهای BCP-47 از مستندات TTS)
+        # 🌐 لیست کامل لهجه‌ها (کدهای BCP-47 از مستندات TTS)
         accent_options = {
             "تشخیص خودکار": None,
-            "فارسی (ایران)": "fa-IR",
-            "انگلیسی (آمریکا)": "en-US",
-            "انگلیسی (هند)": "en-IN",
-            "عربی (مصر)": "ar-EG",
-            "فرانسوی (فرانسه)": "fr-FR",
-            "اسپانیایی (آمریکا)": "es-US",
-            "آلمانی (آلمان)": "de-DE",
-            "هندی (هند)": "hi-IN",
-            "اندونزیایی (اندونزی)": "id-ID",
-            "ایتالیایی (ایتالیا)": "it-IT",
-            "ژاپنی (ژاپن)": "ja-JP",
-            "کره‌ای (کره)": "ko-KR",
-            "پرتغالی (برزیل)": "pt-BR",
-            "روسی (روسیه)": "ru-RU",
-            "هلندی (هلند)": "nl-NL",
-            "لهستانی (لهستان)": "pl-PL",
-            "تایلندی (تایلند)": "th-TH",
-            "ترکی (ترکیه)": "tr-TR",
-            "ویتنامی (ویتنام)": "vi-VN",
-            "رومانیایی (رومانی)": "ro-RO",
-            "اوکراینی (اوکراین)": "uk-UA",
-            "بنگالی (بنگلادش)": "bn-BD",
-            "مراتی (هند)": "mr-IN",
-            "تامیل (هند)": "ta-IN",
-            "تلوگو (هند)": "te-IN"
+            "عربی (مصر)": "ar-EG", "آلمانی (آلمان)": "de-DE", "انگلیسی (آمریکا)": "en-US",
+            "اسپانیایی (آمریکا)": "es-US", "فرانسوی (فرانسه)": "fr-FR", "هندی (هند)": "hi-IN",
+            "اندونزیایی (اندونزی)": "id-ID", "ایتالیایی (ایتالیا)": "it-IT", "ژاپنی (ژاپن)": "ja-JP",
+            "کره‌ای (کره)": "ko-KR", "پرتغالی (برزیل)": "pt-BR", "روسی (روسیه)": "ru-RU",
+            "هلندی (هلند)": "nl-NL", "لهستانی (لهستان)": "pl-PL", "تایلندی (تایلند)": "th-TH",
+            "ترکی (ترکیه)": "tr-TR", "ویتنامی (ویتنام)": "vi-VN", "رومانیایی (رومانی)": "ro-RO",
+            "اوکراینی (اوکراین)": "uk-UA", "بنگالی (بنگلادش)": "bn-BD", 
+            "انگلیسی (هند)": "en-IN", "مراتی (هند)": "mr-IN", "تامیل (هند)": "ta-IN", "تلوگو (هند)": "te-IN"
+        }
+
+        # 🔊 لیست کامل گزینه‌های صوتی (۳۰ گزینه مطابق مستندات)
+        all_voices = [
+            "Zephyr", "Puck", "Charon", "Kore", "Fenrir", "Leda", 
+            "Orus", "Aoede", "Callirrhoe", "Autonoe", "Enceladus", "Iapetus",
+            "Umbriel", "Algieba", "Despina", "Erinome", "Algenib", "Rasalgethi",
+            "Laomedeia", "Achernar", "Alnilam", "Schedar", "Gacrux", "Pulcherrima",
+            "Achird", "Zubenelgenubi", "Vindemiatrix", "Sadachbia", "Sadaltager", "Sulafat"
+        ]
+
+        # 🎵 توصیفات صداها (مطابق مستندات رسمی)
+        voice_descriptions = {
+            "Zephyr": "Bright", "Puck": "Upbeat", "Charon": "Informative",
+            "Kore": "Firm", "Fenrir": "Excitable", "Leda": "Youthful",
+            "Orus": "Firm", "Aoede": "Breezy", "Callirrhoe": "Easy-going",
+            "Autonoe": "Bright", "Enceladus": "Breathy", "Iapetus": "Clear",
+            "Umbriel": "Easy-going", "Algieba": "Smooth", "Despina": "Smooth",
+            "Erinome": "Clear", "Algenib": "Gravelly", "Rasalgethi": "Informative",
+            "Laomedeia": "Upbeat", "Achernar": "Soft", "Alnilam": "Firm",
+            "Schedar": "Even", "Gacrux": "Mature", "Pulcherrima": "Forward",
+            "Achird": "Friendly", "Zubenelgenubi": "Casual", "Vindemiatrix": "Gentle",
+            "Sadachbia": "Lively", "Sadaltager": "Knowledgeable", "Sulafat": "Warm"
         }
 
         # 🎤 بخش تولید رونوشت خودکار
@@ -178,18 +185,20 @@ if api_key:
 
         # 📝 بخش متن ورودی
         st.header("📝 متن ورودی")
+        
         if mode == "چندبلندگو":
             st.info("""
-            **قالب پیشنهادی برای چندبلندگو:**
+            **قالب پیشنهادی برای چندبلندگو (مطابق مستندات):**
             ```
-            گوینده۱: متن مورد نظر
-            گوینده۲: پاسخ گوینده دوم
+            TTS the following conversation between علی and سارا:
+            علی: سلام سارا! امروز چطوری؟
+            سارا: سلام علی! خوبم ممنون. تو چطور؟
             ```
-            یا از دستورات سبک و لهجه استفاده کنید:
+            **یا با دستورات سبک:**
             ```
-            گوینده۱ را خسته و بی‌حال با لهجه فارسی و گوینده۲ را هیجان‌زده و شاد با لهجه انگلیسی نشان بده:
-            گوینده۱: خب... برنامۀ امروز چیه؟
-            گوینده۲: You're never going to guess!
+            Make علی sound tired and bored, and سارا sound excited and happy:
+            علی: So... what's on the agenda today?
+            سارا: You're never going to guess!
             ```
             """)
 
@@ -198,59 +207,14 @@ if api_key:
                 "📝 متن مورد نظر:",
                 value=st.session_state.generated_transcript,
                 height=200,
-                placeholder="مثال: با لحن شاد: متن شما..."
+                placeholder='مثال: Say cheerfully: Have a wonderful day!'
             )
         else:
             text_input = st.text_area(
                 "📝 متن مورد نظر:",
                 height=200,
-                placeholder="مثال: با لحن شاد: متن شما... یا برای چندبلندگو از قالب بالا استفاده کنید"
+                placeholder='مثال: Say cheerfully: Have a wonderful day! یا برای چندبلندگو از قالب بالا استفاده کنید'
             )
-
-        # 🔊 لیست کامل گزینه‌های صوتی (به‌روز شده بر اساس مستندات)
-        all_voices = [
-            "Zephyr", "Puck", "Sharon", "Kore", "Aurorus", "Fenrir",
-            "Spring", "Leda", "Aoede", "Callirrhoe", "Autonoe", "Enceladus",
-            "Iapetus", "Umbriel", "Algieba", "Despina", "Erinome", "Algenib",
-            "Rasalgethi", "Laomedeia", "Achernar", "Elnath", "Schedar", "Gacrux",
-            "Pulcherrima", "Achird", "Zubenelgenubi", "Vindemiatrix", "Sadachbia",
-            "Sadaltager", "Sulafat"
-        ]
-
-        # 🎵 توصیفات صداها (به‌روز شده)
-        voice_descriptions = {
-            "Zephyr": "روشن و شفاف", 
-            "Puck": "شاداب و پرانرژی", 
-            "Sharon": "آموزنده و واضح",
-            "Kore": "محکم و مطمئن", 
-            "Aurorus": "گرم و دوستانه", 
-            "Fenrir": "هیجان‌انگیز",
-            "Spring": "تازه و جوان", 
-            "Leda": "ملایم و آرام", 
-            "Aoede": "نسیمی و سبک",
-            "Callirrhoe": "آسان‌گیر", 
-            "Autonoe": "درخشان", 
-            "Enceladus": "نفس‌گیر",
-            "Iapetus": "روشن", 
-            "Umbriel": "آسان‌گیر", 
-            "Algieba": "صاف و نرم",
-            "Despina": "صاف", 
-            "Erinome": "درخشان", 
-            "Algenib": "زبر و سنگریزه‌ای",
-            "Rasalgethi": "آموزنده", 
-            "Laomedeia": "خوش‌بین", 
-            "Achernar": "نرم",
-            "Elnath": "محکم", 
-            "Schedar": "یکنواخت", 
-            "Gacrux": "بالغ",
-            "Pulcherrima": "رو به جلو", 
-            "Achird": "دوستانه", 
-            "Zubenelgenubi": "گاه‌به‌گاه",
-            "Vindemiatrix": "ملایم", 
-            "Sadachbia": "سرزنده", 
-            "Sadaltager": "دانا",
-            "Sulafat": "گرم"
-        }
 
         # 👥 بخش انتخاب صداها و لهجه‌ها
         if mode == "تک‌بلندگو":
@@ -261,13 +225,14 @@ if api_key:
                 selected_voice = st.selectbox(
                     "انتخاب صدا:",
                     options=all_voices,
-                    format_func=lambda x: f"{x} - {voice_descriptions.get(x, '')}"
+                    format_func=lambda x: f"{x} - {voice_descriptions.get(x, '')}",
+                    index=all_voices.index("Kore")
                 )
 
             with col2:
                 style_instruction = st.text_input(
                     "🎭 دستور سبک (اختیاری):",
-                    placeholder="مثال: با لحن شاد بگو"
+                    placeholder='مثال: Say cheerfully'
                 )
 
             with col3:
@@ -291,7 +256,7 @@ if api_key:
                     format_func=lambda x: f"{x} - {voice_descriptions.get(x, '')}",
                     key="v1"
                 )
-                style1 = st.text_input("🎭 سبک گوینده ۱ (اختیاری):", placeholder="مثال: خسته و بی‌حال")
+                style1 = st.text_input("🎭 سبک گوینده ۱ (اختیاری):", placeholder="مثال: tired and bored")
                 accent1 = st.selectbox(
                     "🎤 لهجه گوینده ۱ (اختیاری):",
                     list(accent_options.keys()),
@@ -308,7 +273,7 @@ if api_key:
                     format_func=lambda x: f"{x} - {voice_descriptions.get(x, '')}",
                     key="v2"
                 )
-                style2 = st.text_input("🎭 سبک گوینده ۲ (اختیاری):", placeholder="مثال: هیجان‌زده و شاد")
+                style2 = st.text_input("🎭 سبک گوینده ۲ (اختیاری):", placeholder="مثال: excited and happy")
                 accent2 = st.selectbox(
                     "🎤 لهجه گوینده ۲ (اختیاری):",
                     list(accent_options.keys()),
@@ -346,10 +311,12 @@ if api_key:
                         processed_text = f"{speed_command}: {processed_text}"
                     
                     if mode == "تک‌بلندگو":
-                        if selected_accent != "تشخیص خودکار":
-                            processed_text = f"Language {accent_options[selected_accent]}: {processed_text}"
+                        # افزودن دستورات سبک و لهجه به صورت متنی
                         if style_instruction:
                             processed_text = f"{style_instruction}: {processed_text}"
+                        
+                        if selected_accent != "تشخیص خودکار":
+                            processed_text = f"Language {accent_options[selected_accent]}: {processed_text}"
 
                         response = client.models.generate_content(
                             model=tts_model,
@@ -362,31 +329,41 @@ if api_key:
                                             voice_name=selected_voice
                                         )
                                     )
-                                    # حذف speech_rate از اینجا
                                 )
                             )
                         )
                     else:
+                        # ساخت قالب چندبلندگو مطابق مستندات
                         style_prefix = ""
                         accent_prefix = ""
-                        if style1 or style2 or accent1 != "تشخیص خودکار" or accent2 != "تشخیص خودکار":
+                        
+                        # ساخت پیشوند دستورات سبک
+                        if style1 or style2:
                             style_parts = []
                             if style1:
-                                style_parts.append(f"{speaker1} را {style1}")
+                                style_parts.append(f"Make {speaker1} sound {style1}")
                             if style2:
-                                style_parts.append(f"{speaker2} را {style2}")
-                            if style_parts:
-                                style_prefix = " و ".join(style_parts) + " نشان بده:\n"
-
+                                style_parts.append(f"{speaker2} sound {style2}")
+                            style_prefix = " and ".join(style_parts) + ":\n"
+                        
+                        # ساخت پیشوند دستورات لهجه
+                        if accent1 != "تشخیص خودکار" or accent2 != "تشخیص خودکار":
                             accent_parts = []
                             if accent1 != "تشخیص خودکار":
-                                accent_parts.append(f"{speaker1} با لهجه {accent_options[accent1]}")
+                                accent_parts.append(f"{speaker1} with {accent_options[accent1]} accent")
                             if accent2 != "تشخیص خودکار":
-                                accent_parts.append(f"{speaker2} با لهجه {accent_options[accent2]}")
+                                accent_parts.append(f"{speaker2} with {accent_options[accent2]} accent")
                             if accent_parts:
-                                accent_prefix = " و ".join(accent_parts) + ":\n"
-
-                        processed_text = accent_prefix + style_prefix + processed_text
+                                accent_prefix = " and ".join(accent_parts) + ":\n"
+                        
+                        # ترکیب تمام پیشوندها
+                        prefix = accent_prefix + style_prefix
+                        if prefix:
+                            processed_text = prefix + processed_text
+                        
+                        # اضافه کردن قالب TTS برای چندبلندگو
+                        if not processed_text.startswith("TTS the following conversation"):
+                            processed_text = f"TTS the following conversation between {speaker1} and {speaker2}:\n{processed_text}"
 
                         response = client.models.generate_content(
                             model=tts_model,
@@ -414,7 +391,6 @@ if api_key:
                                             )
                                         ]
                                     )
-                                    # حذف speech_rate از اینجا
                                 )
                             )
                         )
@@ -465,18 +441,17 @@ if api_key:
 
         with sample_col1:
             if st.button("نمونه تک‌بلندگو - خوش‌آمدگویی", use_container_width=True):
-                st.session_state.sample_text = "با لحن گرم و دوستانه: به استودیوی جمینی خوش آمدید! امیدواریم از قابلیت‌های متن به گفتار لذت ببرید."
+                st.session_state.sample_text = 'Say cheerfully: Have a wonderful day! Welcome to Gemini TTS Studio Pro!'
 
         with sample_col2:
             if st.button("نمونه چندبلندگو - گفتگوی روزمره", use_container_width=True):
-                st.session_state.sample_text = f"""علی: سلام سارا! امروز چطوری؟
-سارا: سلام علی! خوبم ممنون. تو چطور؟
-علی: عالیم! یه پروژه جدید شروع کردم.
-سارا: چه جالب! برام بیشتر تعریف کن."""
+                st.session_state.sample_text = f"""TTS the following conversation between {speaker1} and {speaker2}:
+{speaker1}: سلام! امروز چطوری؟
+{speaker2}: خوبم ممنون. تو چطور؟"""
 
         with sample_col3:
             if st.button("نمونه دراماتیک - داستان", use_container_width=True):
-                st.session_state.sample_text = "با لحن دراماتیک و پراحساس: در سرزمینی دور، قهرمانی بود که با شجاعت به دنبال حقیقت می‌گشت. راه پرخطری پیش رو داشت اما هرگز تسلیم نشد."
+                st.session_state.sample_text = 'Say in a dramatic voice: In a land far away, a hero embarked on an epic journey filled with challenges and triumphs.'
 
         if 'sample_text' in st.session_state:
             text_input = st.text_area("📝 متن مورد نظر:", st.session_state.sample_text, height=150, key="sample_text_area")
@@ -497,8 +472,10 @@ else:
 
     ### 🆕 قابلیت‌های جدید در این نسخه:
     - ✅ پشتیبانی از مدل‌های Gemini 2.5 Flash/Pro Preview TTS
-    - ✅ کنترل سرعت گفتار از طریق دستورات متنی
-    - ✅ لیست به‌روز شده صداها و توصیفات
+    - ✅ ۳۰ گزینه صوتی کامل مطابق مستندات
+    - ✅ ۲۴ لهجه پشتیبانی شده (کد BCP-47)
+    - ✅ قالب چندبلندگو مطابق مستندات رسمی
+    - ✅ دستورات سبک به زبان انگلیسی (مطابق مستندات)
     - ✅ مدیریت خطاهای بهبود یافته
     - ✅ سازگاری کامل با مستندات جدید Gemini API
     """)
