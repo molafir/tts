@@ -1,6 +1,6 @@
 import streamlit as st
 import wave
-from google.cloud import genai  # استفاده از کتابخانه جدید
+from google.cloud import genai
 from google.cloud.genai import types
 
 # 🎵 تابع ذخیره wav
@@ -13,7 +13,7 @@ def save_wave(filename, pcm, channels=1, rate=24000, sample_width=2):
         wf.writeframes(pcm)
 
 # 📊 تابع بررسی طول متن
-def validate_text_length(client, text, max_tokens=10000):  # کاهش به 10000 برای سازگاری با TPM مدل TTS
+def validate_text_length(client, text, max_tokens=10000):
     """بررسی محدودیت طول متن بر اساس توکن با استفاده از API"""
     try:
         token_count = client.count_tokens(
@@ -22,7 +22,6 @@ def validate_text_length(client, text, max_tokens=10000):  # کاهش به 10000
         return token_count <= max_tokens, token_count
     except Exception as e:
         st.error(f"خطا در شمارش توکن‌ها: {e}")
-        # در صورت خطا، تخمین تقریبی
         estimated_tokens = len(text) / 4
         st.warning("شمارش توکن‌ها تقریبی است (۴ کاراکتر ≈ ۱ توکن).")
         return estimated_tokens <= max_tokens, estimated_tokens
@@ -80,14 +79,13 @@ with st.sidebar:
     st.caption("۳۰ گزینه صوتی و ۲۴ لهجه (کد BCP-47) از مستندات پشتیبانی می‌شوند")
     st.subheader("⚠️ محدودیت‌ها")
     st.warning("""
-    - حداکثر ۱۰۰۰۰ توکن در دقیقه برای مدل‌های TTS (مانند gemini-2.5-flash-preview-tts)
+    - حداکثر ۱۰۰۰۰ توکن در دقیقه برای مدل‌های TTS
     - ۳ درخواست در دقیقه (RPM) و ۱۵ درخواست در روز (RPD) برای مدل‌های TTS در ردیف رایگان
     - فقط ورودی متنی پشتیبانی می‌شود
     - حداکثر ۲ بلندگو در حالت چندبلندگو
     - مدل‌های TTS در حالت پیش‌نمایش هستند و ممکن است پاسخ‌های خالی یا ناپایدار برگردانند
     - تنظیم سرعت گفتار پشتیبانی نمی‌شود
-    - از کتابخانه google-genai استفاده کنید (google-generativeai منسوخ است)
-    - API سازگار با OpenAI از TTS پشتیبانی نمی‌کند
+    - از کتابخانه google-genai استفاده کنید
     """)
     st.subheader("🌐 زبان و لهجه")
     st.info("زبان و لهجه به‌صورت خودکار تشخیص داده می‌شود، اما می‌توانید کد BCP-47 خاصی را انتخاب کنید. برای پایداری، از پرامپت‌های ساده استفاده کنید.")
@@ -111,13 +109,13 @@ if api_key:
             tts_model = st.selectbox(
                 "🤖 مدل TTS:",
                 ["gemini-2.5-flash-preview-tts", "gemini-2.5-pro-preview-tts"],
-                help="مدل‌های TTS در حالت پیش‌نمایش هستند و ممکن است ناپایدار باشند. gemini-2.5-pro-preview-tts توصیه می‌شود."
+                help="مدل‌های TTS در حالت پیش‌نمایش هستند. gemini-2.5-pro-preview-tts توصیه می‌شود."
             )
 
         with col3:
             st.markdown("🎤 **سرعت گفتار**: در حال حاضر غیرقابل تنظیم (پیش‌فرض: 1.0)")
 
-        # 🌐 لیست لهجه‌ها (کدهای BCP-47 از مستندات TTS)
+        # 🌐 لیست لهجه‌ها (کدهای BCP-47)
         accent_options = {
             "تشخیص خودکار": None,
             "فارسی (ایران)": "fa-IR",
@@ -181,7 +179,7 @@ if api_key:
             گوینده۱: متن مورد نظر
             گوینده۲: پاسخ گوینده دوم
             ```
-            **توجه**: از دستورات پیچیده (مثل ترکیب لهجه و سبک) خودداری کنید، زیرا ممکن است با مدل‌های پیش‌نمایش ناسازگار باشند. برای پایداری، از پرامپت‌های ساده استفاده کنید.
+            **توجه**: از دستورات پیچیده (مثل ترکیب لهجه و سبک) خودداری کنید.
             """)
 
         if 'generated_transcript' in st.session_state and auto_generate:
@@ -246,7 +244,7 @@ if api_key:
                     "🎤 لهجه (اختیاری):",
                     list(accent_options.keys()),
                     index=0,
-                    help="لهجه با کد BCP-47 مشخص می‌شود. در صورت خطا، تشخیص خودکار را انتخاب کنید."
+                    help="لهجه با کد BCP-47 مشخص می‌شود."
                 )
 
         else:
@@ -262,7 +260,7 @@ if api_key:
                     format_func=lambda x: f"{x} - {voice_descriptions.get(x, '')}",
                     key="v1"
                 )
-                style1 = st.text_input("🎭 سبک گوینده ۱ (اختیاری):", placeholder="مثال: خسته و بی‌حال", help="سبک ساده یا خالی توصیه می‌شود.")
+                style1 = st.text_input("🎭 سبک گوینده ۱ (اختیاری):", placeholder="مثال: خسته و بی‌حال")
                 accent1 = st.selectbox(
                     "🎤 لهجه گوینده ۱ (اختیاری):",
                     list(accent_options.keys()),
@@ -279,7 +277,7 @@ if api_key:
                     format_func=lambda x: f"{x} - {voice_descriptions.get(x, '')}",
                     key="v2"
                 )
-                style2 = st.text_input("🎭 سبک گوینده ۲ (اختیاری):", placeholder="مثال: هیجان‌زده و شاد", help="سبک ساده یا خالی توصیه می‌شود.")
+                style2 = st.text_input("🎭 سبک گوینده ۲ (اختیاری):", placeholder="مثال: هیجان‌زده و شاد")
                 accent2 = st.selectbox(
                     "🎤 لهجه گوینده ۲ (اختیاری):",
                     list(accent_options.keys()),
@@ -290,7 +288,7 @@ if api_key:
         # 📊 بررسی طول متن
         if text_input:
             is_valid, token_count = validate_text_length(client, text_input)
-            progress = min(token_count / 10000, 1.0)  # به‌روزرسانی برای محدودیت TPM مدل TTS
+            progress = min(token_count / 10000, 1.0)
 
             st.progress(progress)
 
@@ -378,12 +376,11 @@ if api_key:
 
                     # بررسی پاسخ API
                     if not response or not response.candidates or not response.candidates[0].content or not response.candidates[0].content.parts:
-                        st.error("❌ پاسخ API نامعتبر است. ممکن است مدل TTS در دسترس نباشد، پرامپت نادرست باشد یا محدودیت نرخ نقض شده باشد.")
+                        st.error("❌ پاسخ API نامعتبر است. ممکن است مدل TTS در دسترس نباشد یا پرامپت نادرست باشد.")
                         st.info(f"💡 لطفاً موارد زیر را بررسی کنید:\n"
                                 f"- کلید API معتبر است و دسترسی به {tts_model} دارد.\n"
                                 f"- متن ورودی ساده و بدون دستورات پیچیده است.\n"
-                                f"- محدودیت‌های نرخ (۳ RPM، ۱۵ RPD، ۱۰۰۰۰ TPM) رعایت شده‌اند.\n"
-                                f"- لهجه‌ها (مثل {selected_accent if mode == 'تک‌بلندگو' else f'{accent1}, {accent2}'}) پشتیبانی می‌شوند.")
+                                f"- محدودیت‌های نرخ (۳ RPM، ۱۵ RPD، ۱۰۰۰۰ TPM) رعایت شده‌اند.")
                         st.warning(f"مدل {tts_model} در حالت پیش‌نمایش است. مدل gemini-2.5-pro-preview-tts را امتحان کنید.")
                         return
 
@@ -421,7 +418,7 @@ if api_key:
             except Exception as e:
                 st.error(f"❌ خطا در تولید صدا: {e}")
                 if "429" in str(e):
-                    st.error("محدودیت نرخ درخواست (RPM/TPM/RPD) نقض شده است. لطفاً چند دقیقه صبر کنید و دوباره امتحان کنید.")
+                    st.error("محدودیت نرخ درخواست (RPM/TPM/RPD) نقض شده است. لطفاً چند دقیقه صبر کنید.")
                     st.info("محدودیت‌های مدل TTS: ۳ درخواست در دقیقه، ۱۵ درخواست در روز، ۱۰۰۰۰ توکن در دقیقه.")
                 elif "404" in str(e):
                     st.error(f"مدل {tts_model} در دسترس نیست. لطفاً کلید API یا دسترسی به مدل را بررسی کنید.")
@@ -432,10 +429,8 @@ if api_key:
                             f"- مدل {tts_model} در منطقه شما در دسترس است.\n"
                             f"- کلید API دسترسی به TTS دارد.")
                     st.warning("مدل gemini-2.5-pro-preview-tts را امتحان کنید یا از نمونه‌های آماده استفاده کنید.")
-                elif "extra_forbidden" in str(e):
-                    st.error("تنظیمات غیرمجاز در API شناسایی شد. لطفاً تنظیمات را بررسی کنید.")
                 else:
-                    st.info("💡 ممکن است کلید API نامعتبر باشد یا سرویس دچار مشکل شده باشد. مدل‌های TTS در حالت پیش‌نمایش هستند.")
+                    st.info("💡 ممکن است کلید API نامعتبر باشد یا سرویس دچار مشکل شده باشد.")
 
         # 📚 بخش نمونه‌های آماده
         st.header("🎭 نمونه‌های آماده")
@@ -454,7 +449,7 @@ if api_key:
 
         with sample_col3:
             if st.button("نمونه دراماتیک - داستان", use_container_width=True):
-                st.session_state.sample_text = "در سرزمینی دور، قهرمانی بود که با شجاعت به دنبال حقیقت می‌گشت. راه پرخطری پیش رو داشت اما هرگز تسلیم نشد."
+                st.session_state.sample_text = "در سرزمینی دور، قهرمانی بود که با شجاعت به دنبال حقیقت می‌گشت."
 
         if 'sample_text' in st.session_state:
             text_input = st.text_area("📝 متن مورد نظر:", st.session_state.sample_text, height=150)
