@@ -14,14 +14,17 @@ def save_wave(filename, pcm, channels=1, rate=24000, sample_width=2):
 
 # 📊 تابع بررسی طول متن
 def validate_text_length(client, text, max_tokens=32000):
-    """بررسی محدودیت طول متن بر اساس توکن"""
+    """بررسی محدودیت طول متن بر اساس توکن با استفاده از API"""
     try:
-        # فرض می‌کنیم API Gemini تابع count_tokens داره
-        token_count = client.models.count_tokens(model="gemini-2.5-flash-preview-tts", contents=text).token_count
+        token_count = client.models.count_tokens(
+            model="gemini-2.0-flash", contents=text
+        ).total_tokens
         return token_count <= max_tokens, token_count
-    except AttributeError:
-        # اگر count_tokens وجود نداشت، تخمین تقریبی
+    except Exception as e:
+        st.error(f"خطا در شمارش توکن‌ها: {e}")
+        # در صورت خطا، تخمین تقریبی
         estimated_tokens = len(text) / 4
+        st.warning("شمارش توکن‌ها تقریبی است (۴ کاراکتر ≈ ۱ توکن).")
         return estimated_tokens <= max_tokens, estimated_tokens
 
 # 🎭 تابع تولید رونوشت خودکار
@@ -35,12 +38,14 @@ def generate_transcript(client, topic, length, speaker1="علی", speaker2="سا
     """
     try:
         response = client.models.generate_content(
-            model="gemini-1.5-flash",  # به‌روز شده به مدل معتبر
+            model="gemini-2.0-flash",  # مدل به‌روز برای تولید متن
             contents=prompt
         )
         return response.text
     except Exception as e:
         st.error(f"خطا در تولید رونوشت: {e}")
+        if "404" in str(e):
+            st.error("مدل gemini-2.0-flash در دسترس نیست. لطفاً کلید API یا دسترسی به مدل را بررسی کنید.")
         return None
 
 # 🎨 تنظیمات صفحه
@@ -72,6 +77,7 @@ with st.sidebar:
     - حداکثر ۳۲,۰۰۰ توکن در هر درخواست
     - فقط ورودی متنی پشتیبانی می‌شود
     - حداکثر ۲ بلندگو در حالت چندبلندگو
+    - مدل‌های TTS در حالت پیش‌نمایش هستند و ممکن است ناپایدار باشند
     """)
     st.subheader("🌐 زبان")
     st.info("زبان به‌صورت خودکار تشخیص داده می‌شود، اما می‌توانید زبان خاصی را انتخاب کنید.")
@@ -85,35 +91,34 @@ if api_key:
 
         # 🎛️ بخش تنظیمات پیشرفته
         st.header("⚙️ تنظیمات پیشرفته")
-        col1, col2, col3, col4 = st.columns(4)
+        col1, col2, col3 = st.columns(3)
 
         with col1:
-            # حالت گفتار
             mode = st.radio("🎭 حالت گفتار:", ["تک‌بلندگو", "چندبلندگو"])
 
         with col2:
-            # مدل TTS
-            model = st.selectbox(
+            tts_model = st.selectbox(
                 "🤖 مدل TTS:",
-                ["gemini-2.5-flash-preview-tts", "gemini-2.5-pro-preview-tts"]
+                ["gemini-2.5-flash-preview-tts", "gemini-2.5-pro-preview-tts"],
+                help="مدل‌های TTS در حالت پیش‌نمایش هستند."
             )
 
         with col3:
-            # سبک پیش‌فرض
-            default_style = st.selectbox(
-                "🎨 سبک پیش‌فرض:",
-                ["عادی", "شاد", "غمگین", "هیجان‌زده", "رسمی", "دوستانه", "دراماتیک"]
-            )
-
-        with col4:
-            # سرعت گفتار
             speech_rate = st.slider("🎤 سرعت گفتار:", 0.5, 2.0, 1.0, 0.1)
 
         # 🌐 انتخاب زبان (اختیاری)
+        language_options = {
+            "تشخیص خودکار": None,
+            "فارسی": "fa-IR",
+            "انگلیسی": "en-US",
+            "عربی": "ar-EG",
+            "فرانسوی": "fr-FR",
+            "اسپانیایی": "es-US"
+        }
         language = st.selectbox(
             "🌐 زبان (اختیاری - پیش‌فرض: تشخیص خودکار):",
-            ["تشخیص خودکار", "فارسی", "انگلیسی", "عربی", "فرانسوی", "اسپانیایی"],
-            help="زبان به‌صورت خودکار تشخیص داده می‌شود، اما می‌توانید انتخاب کنید."
+            list(language_options.keys()),
+            help="زبان به‌صورت خودکار تشخیص داده می‌شود، اما می‌توانید کد BCP-47 خاصی را انتخاب کنید."
         )
 
         # 🎤 بخش تولید رونوشت خودکار
@@ -158,19 +163,18 @@ if api_key:
             ```
             """)
 
-        # استفاده از رونوشت تولیدشده یا ورودی کاربر
         if 'generated_transcript' in st.session_state and auto_generate:
             text_input = st.text_area(
                 "📝 متن مورد نظر:",
                 value=st.session_state.generated_transcript,
                 height=200,
-                placeholder=f"مثال: با لحن {default_style}: متن شما..."
+                placeholder="مثال: با لحن شاد: متن شما..."
             )
         else:
             text_input = st.text_area(
                 "📝 متن مورد نظر:",
                 height=200,
-                placeholder=f"مثال: با لحن {default_style}: متن شما... یا برای چندبلندگو از قالب بالا استفاده کنید"
+                placeholder="مثال: با لحن شاد: متن شما... یا برای چندبلندگو از قالب بالا استفاده کنید"
             )
 
         # 🔊 لیست کامل گزینه‌های صوتی
@@ -212,7 +216,7 @@ if api_key:
             with col2:
                 style_instruction = st.text_input(
                     "🎭 دستور سبک (اختیاری):",
-                    placeholder=f"مثال: با لحن {default_style} بگو"
+                    placeholder="مثال: با لحن شاد بگو"
                 )
 
         else:
@@ -243,16 +247,16 @@ if api_key:
 
         # 📊 بررسی طول متن
         if text_input:
-            is_valid, estimated_tokens = validate_text_length(client, text_input)
-            progress = min(estimated_tokens / 32000, 1.0)
+            is_valid, token_count = validate_text_length(client, text_input)
+            progress = min(token_count / 32000, 1.0)
 
             st.progress(progress)
 
             if not is_valid:
-                st.error(f"❌ متن بسیار طولانی! تخمین توکن: {estimated_tokens:.0f} از 32,000")
+                st.error(f"❌ متن بسیار طولانی! تعداد توکن‌ها: {token_count:.0f} از 32,000")
                 st.warning("لطفاً متن را کوتاه کنید.")
             else:
-                st.success(f"✅ طول متن مناسب است. تخمین توکن: {estimated_tokens:.0f} از 32,000")
+                st.success(f"✅ طول متن مناسب است. تعداد توکن‌ها: {token_count:.0f} از 32,000")
 
         # 🎧 دکمه تولید صدا
         if st.button(
@@ -263,17 +267,16 @@ if api_key:
         ):
             try:
                 with st.spinner("🔮 در حال تولید صدا..."):
-                    # تنظیم زبان اگر انتخاب شده
                     processed_text = text_input
                     if language != "تشخیص خودکار":
-                        processed_text = f"زبان {language}: {text_input}"
+                        processed_text = f"Language {language_options[language]}: {text_input}"
 
                     if mode == "تک‌بلندگو":
                         if style_instruction:
                             processed_text = f"{style_instruction}: {text_input}"
 
                         response = client.models.generate_content(
-                            model=model,
+                            model=tts_model,
                             contents=processed_text,
                             config=types.GenerateContentConfig(
                                 response_modalities=["AUDIO"],
@@ -283,7 +286,7 @@ if api_key:
                                             voice_name=selected_voice
                                         )
                                     ),
-                                    rate=speech_rate  # اضافه کردن سرعت گفتار
+                                    rate=speech_rate
                                 )
                             )
                         )
@@ -299,7 +302,7 @@ if api_key:
                             processed_text = style_prefix + processed_text
 
                         response = client.models.generate_content(
-                            model=model,
+                            model=tts_model,
                             contents=processed_text,
                             config=types.GenerateContentConfig(
                                 response_modalities=["AUDIO"],
@@ -324,12 +327,11 @@ if api_key:
                                             )
                                         ]
                                     ),
-                                    rate=speech_rate  # اضافه کردن سرعت گفتار
+                                    rate=speech_rate
                                 )
                             )
                         )
 
-                    # ذخیره و پخش صدا
                     data = response.candidates[0].content.parts[0].inline_data.data
                     file_name = "output.wav"
                     save_wave(file_name, data)
@@ -349,13 +351,12 @@ if api_key:
                                 use_container_width=True
                             )
 
-                    # اطلاعات تولید
                     st.subheader("📊 اطلاعات تولید")
                     info_col1, info_col2, info_col3 = st.columns(3)
                     with info_col1:
                         st.metric("طول متن", f"{len(text_input)} کاراکتر")
                     with info_col2:
-                        st.metric("تخمین توکن", f"{estimated_tokens:.0f}")
+                        st.metric("تعداد توکن‌ها", f"{token_count:.0f}")
                     with info_col3:
                         if mode == "تک‌بلندگو":
                             st.metric("صدا", selected_voice)
@@ -364,7 +365,10 @@ if api_key:
 
             except Exception as e:
                 st.error(f"❌ خطا در تولید صدا: {e}")
-                st.info("💡 ممکن است کلید API نامعتبر باشد، مدل انتخاب‌شده در دسترس نباشد، یا سرویس دچار مشکل شده باشد.")
+                if "404" in str(e):
+                    st.error(f"مدل {tts_model} در دسترس نیست. لطفاً کلید API یا دسترسی به مدل را بررسی کنید.")
+                else:
+                    st.info("💡 ممکن است کلید API نامعتبر باشد یا سرویس دچار مشکل شده باشد. مدل‌های TTS در حالت پیش‌نمایش هستند.")
 
         # 📚 بخش نمونه‌های آماده
         st.header("🎭 نمونه‌های آماده")
