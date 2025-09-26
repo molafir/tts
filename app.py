@@ -1,7 +1,7 @@
 import streamlit as st
 import wave
-from google import genai
-from google.genai import types
+from google.cloud import genai  # استفاده از کتابخانه جدید
+from google.cloud.genai import types
 
 # 🎵 تابع ذخیره wav
 def save_wave(filename, pcm, channels=1, rate=24000, sample_width=2):
@@ -13,11 +13,11 @@ def save_wave(filename, pcm, channels=1, rate=24000, sample_width=2):
         wf.writeframes(pcm)
 
 # 📊 تابع بررسی طول متن
-def validate_text_length(client, text, max_tokens=32000):
+def validate_text_length(client, text, max_tokens=10000):  # کاهش به 10000 برای سازگاری با TPM مدل TTS
     """بررسی محدودیت طول متن بر اساس توکن با استفاده از API"""
     try:
-        token_count = client.models.count_tokens(
-            model="gemini-2.0-flash", contents=text
+        token_count = client.count_tokens(
+            model="models/gemini-2.0-flash", contents=[{"parts": [{"text": text}]}]
         ).total_tokens
         return token_count <= max_tokens, token_count
     except Exception as e:
@@ -37,14 +37,19 @@ def generate_transcript(client, topic, length, speaker1="علی", speaker2="سا
     {speaker2}: پاسخ مکالمه
     """
     try:
-        response = client.models.generate_content(
-            model="gemini-2.0-flash",  # مدل به‌روز برای تولید متن
-            contents=prompt
+        response = client.generate_content(
+            model="models/gemini-2.0-flash",
+            contents=[{"parts": [{"text": prompt}]}]
         )
-        return response.text
+        if not response or not response.candidates or not response.candidates[0].content:
+            st.error("پاسخ API برای تولید رونوشت نامعتبر است.")
+            return None
+        return response.candidates[0].content.parts[0].text
     except Exception as e:
         st.error(f"خطا در تولید رونوشت: {e}")
-        if "404" in str(e):
+        if "429" in str(e):
+            st.error("محدودیت نرخ درخواست (RPM/TPM/RPD) نقض شده است. لطفاً چند دقیقه صبر کنید.")
+        elif "404" in str(e):
             st.error("مدل gemini-2.0-flash در دسترس نیست. لطفاً کلید API یا دسترسی به مدل را بررسی کنید.")
         return None
 
@@ -58,7 +63,7 @@ st.set_page_config(
 
 # 🎯 عنوان و راهنما
 st.title("🎙️ Gemini TTS Studio Pro")
-st.caption("تبدیل متن به گفتار حرفه‌ای با Gemini TTS - با پشتیبانی از لهجه‌ها")
+st.caption("تبدیل متن به گفتار حرفه‌ای با Gemini TTS - با پشتیبانی از کتابخانه google-genai")
 
 # 📚 سایدبار برای راهنما و تنظیمات پیشرفته
 with st.sidebar:
@@ -69,26 +74,31 @@ with st.sidebar:
     - `با لحن شاد: متن شما`
     - `به صورت هیجان‌زده: متن شما`
     - `با صدای آرام: متن شما`
+    **توجه**: دستورات پیچیده ممکن است با مدل‌های TTS پیش‌نمایش ناسازگار باشند.
     """)
     st.subheader("🔊 گزینه‌های صوتی و لهجه")
     st.caption("۳۰ گزینه صوتی و ۲۴ لهجه (کد BCP-47) از مستندات پشتیبانی می‌شوند")
     st.subheader("⚠️ محدودیت‌ها")
     st.warning("""
-    - حداکثر ۳۲,۰۰۰ توکن در هر درخواست
+    - حداکثر ۱۰۰۰۰ توکن در دقیقه برای مدل‌های TTS (مانند gemini-2.5-flash-preview-tts)
+    - ۳ درخواست در دقیقه (RPM) و ۱۵ درخواست در روز (RPD) برای مدل‌های TTS در ردیف رایگان
     - فقط ورودی متنی پشتیبانی می‌شود
     - حداکثر ۲ بلندگو در حالت چندبلندگو
-    - مدل‌های TTS در حالت پیش‌نمایش هستند و ممکن است ناپایدار باشند
-    - تنظیم سرعت گفتار در حال حاضر پشتیبانی نمی‌شود
+    - مدل‌های TTS در حالت پیش‌نمایش هستند و ممکن است پاسخ‌های خالی یا ناپایدار برگردانند
+    - تنظیم سرعت گفتار پشتیبانی نمی‌شود
+    - از کتابخانه google-genai استفاده کنید (google-generativeai منسوخ است)
+    - API سازگار با OpenAI از TTS پشتیبانی نمی‌کند
     """)
     st.subheader("🌐 زبان و لهجه")
-    st.info("زبان و لهجه به‌صورت خودکار تشخیص داده می‌شود، اما می‌توانید کد BCP-47 خاصی را برای لهجه انتخاب کنید.")
+    st.info("زبان و لهجه به‌صورت خودکار تشخیص داده می‌شود، اما می‌توانید کد BCP-47 خاصی را انتخاب کنید. برای پایداری، از پرامپت‌های ساده استفاده کنید.")
 
 # 🔑 دریافت کلید API از کاربر
 api_key = st.text_input("🔑 کلید API Gemini خود را وارد کنید:", type="password")
 
 if api_key:
     try:
-        client = genai.Client(api_key=api_key)
+        genai.configure(api_key=api_key)
+        client = genai.GenerativeModel()
 
         # 🎛️ بخش تنظیمات پیشرفته
         st.header("⚙️ تنظیمات پیشرفته")
@@ -101,7 +111,7 @@ if api_key:
             tts_model = st.selectbox(
                 "🤖 مدل TTS:",
                 ["gemini-2.5-flash-preview-tts", "gemini-2.5-pro-preview-tts"],
-                help="مدل‌های TTS در حالت پیش‌نمایش هستند و ممکن است ناپایدار باشند."
+                help="مدل‌های TTS در حالت پیش‌نمایش هستند و ممکن است ناپایدار باشند. gemini-2.5-pro-preview-tts توصیه می‌شود."
             )
 
         with col3:
@@ -171,12 +181,7 @@ if api_key:
             گوینده۱: متن مورد نظر
             گوینده۲: پاسخ گوینده دوم
             ```
-            یا از دستورات سبک و لهجه استفاده کنید:
-            ```
-            گوینده۱ را خسته و بی‌حال با لهجه فارسی و گوینده۲ را هیجان‌زده و شاد با لهجه انگلیسی نشان بده:
-            گوینده۱: خب... برنامۀ امروز چیه؟
-            گوینده۲: You're never going to guess!
-            ```
+            **توجه**: از دستورات پیچیده (مثل ترکیب لهجه و سبک) خودداری کنید، زیرا ممکن است با مدل‌های پیش‌نمایش ناسازگار باشند. برای پایداری، از پرامپت‌های ساده استفاده کنید.
             """)
 
         if 'generated_transcript' in st.session_state and auto_generate:
@@ -184,13 +189,13 @@ if api_key:
                 "📝 متن مورد نظر:",
                 value=st.session_state.generated_transcript,
                 height=200,
-                placeholder="مثال: با لحن شاد: متن شما..."
+                placeholder="مثال: متن ساده یا با قالب چندبلندگو..."
             )
         else:
             text_input = st.text_area(
                 "📝 متن مورد نظر:",
                 height=200,
-                placeholder="مثال: با لحن شاد: متن شما... یا برای چندبلندگو از قالب بالا استفاده کنید"
+                placeholder="مثال: متن ساده یا با قالب چندبلندگو..."
             )
 
         # 🔊 لیست کامل گزینه‌های صوتی
@@ -232,7 +237,8 @@ if api_key:
             with col2:
                 style_instruction = st.text_input(
                     "🎭 دستور سبک (اختیاری):",
-                    placeholder="مثال: با لحن شاد بگو"
+                    placeholder="مثال: با لحن شاد بگو",
+                    help="برای پایداری، سبک را ساده نگه دارید یا خالی بگذارید."
                 )
 
             with col3:
@@ -240,7 +246,7 @@ if api_key:
                     "🎤 لهجه (اختیاری):",
                     list(accent_options.keys()),
                     index=0,
-                    help="لهجه با کد BCP-47 مشخص می‌شود."
+                    help="لهجه با کد BCP-47 مشخص می‌شود. در صورت خطا، تشخیص خودکار را انتخاب کنید."
                 )
 
         else:
@@ -256,7 +262,7 @@ if api_key:
                     format_func=lambda x: f"{x} - {voice_descriptions.get(x, '')}",
                     key="v1"
                 )
-                style1 = st.text_input("🎭 سبک گوینده ۱ (اختیاری):", placeholder="مثال: خسته و بی‌حال")
+                style1 = st.text_input("🎭 سبک گوینده ۱ (اختیاری):", placeholder="مثال: خسته و بی‌حال", help="سبک ساده یا خالی توصیه می‌شود.")
                 accent1 = st.selectbox(
                     "🎤 لهجه گوینده ۱ (اختیاری):",
                     list(accent_options.keys()),
@@ -273,7 +279,7 @@ if api_key:
                     format_func=lambda x: f"{x} - {voice_descriptions.get(x, '')}",
                     key="v2"
                 )
-                style2 = st.text_input("🎭 سبک گوینده ۲ (اختیاری):", placeholder="مثال: هیجان‌زده و شاد")
+                style2 = st.text_input("🎭 سبک گوینده ۲ (اختیاری):", placeholder="مثال: هیجان‌زده و شاد", help="سبک ساده یا خالی توصیه می‌شود.")
                 accent2 = st.selectbox(
                     "🎤 لهجه گوینده ۲ (اختیاری):",
                     list(accent_options.keys()),
@@ -284,15 +290,15 @@ if api_key:
         # 📊 بررسی طول متن
         if text_input:
             is_valid, token_count = validate_text_length(client, text_input)
-            progress = min(token_count / 32000, 1.0)
+            progress = min(token_count / 10000, 1.0)  # به‌روزرسانی برای محدودیت TPM مدل TTS
 
             st.progress(progress)
 
             if not is_valid:
-                st.error(f"❌ متن بسیار طولانی! تعداد توکن‌ها: {token_count:.0f} از 32,000")
+                st.error(f"❌ متن بسیار طولانی! تعداد توکن‌ها: {token_count:.0f} از 10,000")
                 st.warning("لطفاً متن را کوتاه کنید.")
             else:
-                st.success(f"✅ طول متن مناسب است. تعداد توکن‌ها: {token_count:.0f} از 32,000")
+                st.success(f"✅ طول متن مناسب است. تعداد توکن‌ها: {token_count:.0f} از 10,000")
 
         # 🎧 دکمه تولید صدا
         if st.button(
@@ -310,19 +316,20 @@ if api_key:
                         if style_instruction:
                             processed_text = f"{style_instruction}: {processed_text}"
 
-                        response = client.models.generate_content(
-                            model=tts_model,
-                            contents=processed_text,
-                            config=types.GenerateContentConfig(
-                                response_modalities=["AUDIO"],
-                                speech_config=types.SpeechConfig(
+                        response = client.generate_content(
+                            model=f"models/{tts_model}",
+                            contents=[{"parts": [{"text": processed_text}]}],
+                            generation_config=types.GenerationConfig(
+                                response_mime_type="audio/wav",
+                                audio_config=types.AudioConfig(
                                     voice_config=types.VoiceConfig(
-                                        prebuilt_voice_config=types.PrebuiltVoiceConfig(
+                                        prebuilt_voice=types.PrebuiltVoice(
                                             voice_name=selected_voice
                                         )
                                     )
                                 )
-                            )
+                            ),
+                            stream=False
                         )
                     else:
                         style_prefix = ""
@@ -346,35 +353,39 @@ if api_key:
 
                         processed_text = accent_prefix + style_prefix + text_input
 
-                        response = client.models.generate_content(
-                            model=tts_model,
-                            contents=processed_text,
-                            config=types.GenerateContentConfig(
-                                response_modalities=["AUDIO"],
-                                speech_config=types.SpeechConfig(
-                                    multi_speaker_voice_config=types.MultiSpeakerVoiceConfig(
-                                        speaker_voice_configs=[
-                                            types.SpeakerVoiceConfig(
-                                                speaker=speaker1,
-                                                voice_config=types.VoiceConfig(
-                                                    prebuilt_voice_config=types.PrebuiltVoiceConfig(
-                                                        voice_name=voice1
-                                                    )
-                                                )
+                        response = client.generate_content(
+                            model=f"models/{tts_model}",
+                            contents=[{"parts": [{"text": processed_text}]}],
+                            generation_config=types.GenerationConfig(
+                                response_mime_type="audio/wav",
+                                audio_config=types.AudioConfig(
+                                    multi_speaker_config=types.MultiSpeakerConfig(
+                                        speakers=[
+                                            types.SpeakerConfig(
+                                                speaker_name=speaker1,
+                                                voice_name=voice1
                                             ),
-                                            types.SpeakerVoiceConfig(
-                                                speaker=speaker2,
-                                                voice_config=types.VoiceConfig(
-                                                    prebuilt_voice_config=types.PrebuiltVoiceConfig(
-                                                        voice_name=voice2
-                                                    )
-                                                )
+                                            types.SpeakerConfig(
+                                                speaker_name=speaker2,
+                                                voice_name=voice2
                                             )
                                         ]
                                     )
                                 )
-                            )
+                            ),
+                            stream=False
                         )
+
+                    # بررسی پاسخ API
+                    if not response or not response.candidates or not response.candidates[0].content or not response.candidates[0].content.parts:
+                        st.error("❌ پاسخ API نامعتبر است. ممکن است مدل TTS در دسترس نباشد، پرامپت نادرست باشد یا محدودیت نرخ نقض شده باشد.")
+                        st.info(f"💡 لطفاً موارد زیر را بررسی کنید:\n"
+                                f"- کلید API معتبر است و دسترسی به {tts_model} دارد.\n"
+                                f"- متن ورودی ساده و بدون دستورات پیچیده است.\n"
+                                f"- محدودیت‌های نرخ (۳ RPM، ۱۵ RPD، ۱۰۰۰۰ TPM) رعایت شده‌اند.\n"
+                                f"- لهجه‌ها (مثل {selected_accent if mode == 'تک‌بلندگو' else f'{accent1}, {accent2}'}) پشتیبانی می‌شوند.")
+                        st.warning(f"مدل {tts_model} در حالت پیش‌نمایش است. مدل gemini-2.5-pro-preview-tts را امتحان کنید.")
+                        return
 
                     data = response.candidates[0].content.parts[0].inline_data.data
                     file_name = "output.wav"
@@ -409,8 +420,18 @@ if api_key:
 
             except Exception as e:
                 st.error(f"❌ خطا در تولید صدا: {e}")
-                if "404" in str(e):
+                if "429" in str(e):
+                    st.error("محدودیت نرخ درخواست (RPM/TPM/RPD) نقض شده است. لطفاً چند دقیقه صبر کنید و دوباره امتحان کنید.")
+                    st.info("محدودیت‌های مدل TTS: ۳ درخواست در دقیقه، ۱۵ درخواست در روز، ۱۰۰۰۰ توکن در دقیقه.")
+                elif "404" in str(e):
                     st.error(f"مدل {tts_model} در دسترس نیست. لطفاً کلید API یا دسترسی به مدل را بررسی کنید.")
+                elif "NoneType" in str(e):
+                    st.error("پاسخ API خالی است. ممکن است مدل TTS ناپایدار باشد یا پرامپت نامعتبر باشد.")
+                    st.info(f"💡 لطفاً موارد زیر را بررسی کنید:\n"
+                            f"- متن ورودی ساده (مثلاً بدون لهجه/سبک پیچیده).\n"
+                            f"- مدل {tts_model} در منطقه شما در دسترس است.\n"
+                            f"- کلید API دسترسی به TTS دارد.")
+                    st.warning("مدل gemini-2.5-pro-preview-tts را امتحان کنید یا از نمونه‌های آماده استفاده کنید.")
                 elif "extra_forbidden" in str(e):
                     st.error("تنظیمات غیرمجاز در API شناسایی شد. لطفاً تنظیمات را بررسی کنید.")
                 else:
@@ -422,18 +443,18 @@ if api_key:
 
         with sample_col1:
             if st.button("نمونه تک‌بلندگو - خوش‌آمدگویی", use_container_width=True):
-                st.session_state.sample_text = "با لحن گرم و دوستانه: به استودیوی جمینی خوش آمدید! امیدواریم از قابلیت‌های متن به گفتار لذت ببرید."
+                st.session_state.sample_text = "به استودیوی جمینی خوش آمدید! امیدواریم از قابلیت‌های متن به گفتار لذت ببرید."
 
         with sample_col2:
             if st.button("نمونه چندبلندگو - گفتگوی روزمره", use_container_width=True):
-                st.session_state.sample_text = f"""علی: سلام سارا! امروز چطوری؟
-سارا: سلام علی! خوبم ممنون. تو چطور؟
-علی: عالیم! یه پروژه جدید شروع کردم.
-سارا: چه جالب! برام بیشتر تعریف کن."""
+                st.session_state.sample_text = f"""علی: سلام سارا! امروز چطوره؟
+سارا: سلام علی! عالیه، تو چی؟
+علی: منم خوبم! یه پروژه جدید شروع کردم.
+سارا: واقعاً؟ بگو ببینم چیه!"""
 
         with sample_col3:
             if st.button("نمونه دراماتیک - داستان", use_container_width=True):
-                st.session_state.sample_text = "با لحن دراماتیک و پراحساس: در سرزمینی دور، قهرمانی بود که با شجاعت به دنبال حقیقت می‌گشت. راه پرخطری پیش رو داشت اما هرگز تسلیم نشد."
+                st.session_state.sample_text = "در سرزمینی دور، قهرمانی بود که با شجاعت به دنبال حقیقت می‌گشت. راه پرخطری پیش رو داشت اما هرگز تسلیم نشد."
 
         if 'sample_text' in st.session_state:
             text_input = st.text_area("📝 متن مورد نظر:", st.session_state.sample_text, height=150)
@@ -447,8 +468,9 @@ else:
     st.info("🔐 برای شروع، کلید API خود را وارد کنید.")
     st.markdown("""
     ### 📋 راهنمای دریافت کلید API:
-    1. به Google AI Studio بروید
+    1. به [Google AI Studio](https://aistudio.google.com) بروید
     2. وارد حساب Google خود شوید
     3. از بخش API Keys یک کلید جدید ایجاد کنید
     4. کلید را در فیلد بالا وارد کنید
+    5. اطمینان حاصل کنید که پروژه شما در ردیف مناسب (رایگان یا پولی) برای دسترسی به مدل‌های TTS است
     """)
