@@ -1,7 +1,7 @@
 import streamlit as st
 import wave
 import google.generativeai as genai
-from google.generativeai import types
+from google.generativeai.types import GenerationConfig
 
 # 🎵 تابع ذخیره wav
 def save_wave(filename, pcm, channels=1, rate=24000, sample_width=2):
@@ -13,12 +13,11 @@ def save_wave(filename, pcm, channels=1, rate=24000, sample_width=2):
         wf.writeframes(pcm)
 
 # 📊 تابع بررسی طول متن
-def validate_text_length(client, text, max_tokens=10000):
+def validate_text_length(text, max_tokens=10000):
     """بررسی محدودیت طول متن بر اساس توکن با استفاده از API"""
     try:
-        token_count = client.count_tokens(
-            model="models/gemini-2.0-flash", contents=[{"parts": [{"text": text}]}]
-        ).total_tokens
+        model = genai.GenerativeModel("gemini-1.5-flash")
+        token_count = model.count_tokens(text).total_tokens
         return token_count <= max_tokens, token_count
     except Exception as e:
         st.error(f"خطا در شمارش توکن‌ها: {e}")
@@ -27,7 +26,7 @@ def validate_text_length(client, text, max_tokens=10000):
         return estimated_tokens <= max_tokens, estimated_tokens
 
 # 🎭 تابع تولید رونوشت خودکار
-def generate_transcript(client, topic, length, speaker1="علی", speaker2="سارا", style="پادکست"):
+def generate_transcript(topic, length, speaker1="علی", speaker2="سارا", style="پادکست"):
     """تولید خودکار رونوشت با Gemini"""
     prompt = f"""
     یک مکالمه {style} حدود {length} کلمه بین {speaker1} و {speaker2} درباره "{topic}" ایجاد کن.
@@ -36,10 +35,8 @@ def generate_transcript(client, topic, length, speaker1="علی", speaker2="سا
     {speaker2}: پاسخ مکالمه
     """
     try:
-        response = client.generate_content(
-            model="models/gemini-2.0-flash",
-            contents=[{"parts": [{"text": prompt}]}]
-        )
+        model = genai.GenerativeModel("gemini-2.0-flash")
+        response = model.generate_content(prompt)
         if not response or not response.candidates or not response.candidates[0].content:
             st.error("پاسخ API برای تولید رونوشت نامعتبر است.")
             return None
@@ -49,7 +46,7 @@ def generate_transcript(client, topic, length, speaker1="علی", speaker2="سا
         if "429" in str(e):
             st.error("محدودیت نرخ درخواست (RPM/TPM/RPD) نقض شده است. لطفاً چند دقیقه صبر کنید.")
         elif "404" in str(e):
-            st.error("مدل gemini-2.0-flash در دسترس نیست. لطفاً کلید API یا دسترسی به مدل را بررسی کنید.")
+            st.error("مدل gemini-1.5-flash در دسترس نیست. لطفاً کلید API یا دسترسی به مدل را بررسی کنید.")
         return None
 
 # 🎨 تنظیمات صفحه
@@ -62,7 +59,7 @@ st.set_page_config(
 
 # 🎯 عنوان و راهنما
 st.title("🎙️ Gemini TTS Studio Pro")
-st.caption("تبدیل متن به گفتار حرفه‌ای با Gemini TTS - با پشتیبانی از کتابخانه google-genai")
+st.caption("تبدیل متن به گفتار حرفه‌ای با Gemini TTS - با پشتیبانی از کتابخانه google-generativeai")
 
 # 📚 سایدبار برای راهنما و تنظیمات پیشرفته
 with st.sidebar:
@@ -85,7 +82,7 @@ with st.sidebar:
     - حداکثر ۲ بلندگو در حالت چندبلندگو
     - مدل‌های TTS در حالت پیش‌نمایش هستند و ممکن است پاسخ‌های خالی یا ناپایدار برگردانند
     - تنظیم سرعت گفتار پشتیبانی نمی‌شود
-    - از کتابخانه google-genai استفاده کنید
+    - از کتابخانه google-generativeai استفاده کنید
     """)
     st.subheader("🌐 زبان و لهجه")
     st.info("زبان و لهجه به‌صورت خودکار تشخیص داده می‌شود، اما می‌توانید کد BCP-47 خاصی را انتخاب کنید. برای پایداری، از پرامپت‌های ساده استفاده کنید.")
@@ -96,7 +93,6 @@ api_key = st.text_input("🔑 کلید API Gemini خود را وارد کنید:
 if api_key:
     try:
         genai.configure(api_key=api_key)
-        client = genai.GenerativeModel()
 
         # 🎛️ بخش تنظیمات پیشرفته
         st.header("⚙️ تنظیمات پیشرفته")
@@ -165,7 +161,7 @@ if api_key:
 
             if st.button("🪄 تولید رونوشت", key="generate_transcript"):
                 with st.spinner("در حال تولید رونوشت..."):
-                    transcript = generate_transcript(client, topic, length, style=style)
+                    transcript = generate_transcript(topic, length, style=style)
                     if transcript:
                         st.session_state.generated_transcript = transcript
                         st.success("رونوشت با موفقیت تولید شد!")
@@ -287,7 +283,7 @@ if api_key:
 
         # 📊 بررسی طول متن
         if text_input:
-            is_valid, token_count = validate_text_length(client, text_input)
+            is_valid, token_count = validate_text_length(text_input)
             progress = min(token_count / 10000, 1.0)
 
             st.progress(progress)
@@ -308,26 +304,18 @@ if api_key:
             try:
                 with st.spinner("🔮 در حال تولید صدا..."):
                     processed_text = text_input
+                    model = genai.GenerativeModel(tts_model)
                     if mode == "تک‌بلندگو":
                         if selected_accent != "تشخیص خودکار":
                             processed_text = f"Language {accent_options[selected_accent]}: {text_input}"
                         if style_instruction:
                             processed_text = f"{style_instruction}: {processed_text}"
 
-                        response = client.generate_content(
-                            model=f"models/{tts_model}",
-                            contents=[{"parts": [{"text": processed_text}]}],
-                            generation_config=types.GenerationConfig(
-                                response_mime_type="audio/wav",
-                                audio_config=types.AudioConfig(
-                                    voice_config=types.VoiceConfig(
-                                        prebuilt_voice=types.PrebuiltVoice(
-                                            voice_name=selected_voice
-                                        )
-                                    )
-                                )
-                            ),
-                            stream=False
+                        response = model.generate_content(
+                            contents=processed_text,
+                            generation_config=GenerationConfig(
+                                response_mime_type="audio/wav"
+                            )
                         )
                     else:
                         style_prefix = ""
@@ -339,7 +327,7 @@ if api_key:
                             if style2:
                                 style_parts.append(f"{speaker2} را {style2}")
                             if style_parts:
-                                style_prefix = " و ".join(style_parts) + " نشان بده:\n"
+                                style_prefix = " و ".join(style_parts) + ":\n"
 
                             accent_parts = []
                             if accent1 != "تشخیص خودکار":
@@ -351,27 +339,11 @@ if api_key:
 
                         processed_text = accent_prefix + style_prefix + text_input
 
-                        response = client.generate_content(
-                            model=f"models/{tts_model}",
-                            contents=[{"parts": [{"text": processed_text}]}],
-                            generation_config=types.GenerationConfig(
-                                response_mime_type="audio/wav",
-                                audio_config=types.AudioConfig(
-                                    multi_speaker_config=types.MultiSpeakerConfig(
-                                        speakers=[
-                                            types.SpeakerConfig(
-                                                speaker_name=speaker1,
-                                                voice_name=voice1
-                                            ),
-                                            types.SpeakerConfig(
-                                                speaker_name=speaker2,
-                                                voice_name=voice2
-                                            )
-                                        ]
-                                    )
-                                )
-                            ),
-                            stream=False
+                        response = model.generate_content(
+                            contents=processed_text,
+                            generation_config=GenerationConfig(
+                                response_mime_type="audio/wav"
+                            )
                         )
 
                     # بررسی پاسخ API
@@ -382,7 +354,7 @@ if api_key:
                                 f"- متن ورودی ساده و بدون دستورات پیچیده است.\n"
                                 f"- محدودیت‌های نرخ (۳ RPM، ۱۵ RPD، ۱۰۰۰۰ TPM) رعایت شده‌اند.")
                         st.warning(f"مدل {tts_model} در حالت پیش‌نمایش است. مدل gemini-2.5-pro-preview-tts را امتحان کنید.")
-                        
+                        st.stop()
 
                     data = response.candidates[0].content.parts[0].inline_data.data
                     file_name = "output.wav"
