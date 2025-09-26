@@ -70,6 +70,7 @@ with st.sidebar:
     - `به صورت هیجان‌زده: متن شما`
     - `با صدای آرام: متن شما`
     - `با سرعت آهسته: متن شما`
+    - `با سرعت سریع: متن شما`
     """)
     st.subheader("🔊 گزینه‌های صوتی و لهجه")
     st.caption("۳۰ گزینه صوتی و ۲۴ لهجه (کد BCP-47) از مستندات پشتیبانی می‌شوند")
@@ -79,7 +80,7 @@ with st.sidebar:
     - فقط ورودی متنی پشتیبانی می‌شود
     - حداکثر ۲ بلندگو در حالت چندبلندگو
     - مدل‌های TTS در حالت پیش‌نمایش هستند و ممکن است ناپایدار باشند
-    - ✅ سرعت گفتار قابل تنظیم است (۰.۵ تا ۲.۰)
+    - ✅ سرعت گفتار از طریق دستورات متنی قابل کنترل است
     """)
     st.subheader("🌐 زبان و لهجه")
     st.info("زبان و لهجه به‌صورت خودکار تشخیص داده می‌شود، اما می‌توانید کد BCP-47 خاصی را برای لهجه انتخاب کنید.")
@@ -106,14 +107,19 @@ if api_key:
             )
 
         with col3:
-            speech_rate = st.slider(
+            speech_rate_option = st.selectbox(
                 "🎚️ سرعت گفتار:",
-                min_value=0.5,
-                max_value=2.0,
-                value=1.0,
-                step=0.1,
-                help="سرعت گفتار (0.5 = آهسته, 2.0 = سریع)"
+                ["پیش‌فرض", "آهسته", "متوسط", "سریع"],
+                help="سرعت گفتار از طریق دستورات متنی کنترل می‌شود"
             )
+            
+            # نگاشت سرعت به دستورات متنی
+            speed_commands = {
+                "پیش‌فرض": "",
+                "آهسته": "با سرعت آهسته",
+                "متوسط": "با سرعت متوسط", 
+                "سریع": "با سرعت سریع"
+            }
 
         # 🌐 لیست لهجه‌ها (کدهای BCP-47 از مستندات TTS)
         accent_options = {
@@ -334,9 +340,14 @@ if api_key:
                 with st.spinner("🔮 در حال تولید صدا..."):
                     processed_text = text_input
                     
+                    # افزودن دستور سرعت به متن (اگر انتخاب شده باشد)
+                    speed_command = speed_commands[speech_rate_option]
+                    if speed_command:
+                        processed_text = f"{speed_command}: {processed_text}"
+                    
                     if mode == "تک‌بلندگو":
                         if selected_accent != "تشخیص خودکار":
-                            processed_text = f"Language {accent_options[selected_accent]}: {text_input}"
+                            processed_text = f"Language {accent_options[selected_accent]}: {processed_text}"
                         if style_instruction:
                             processed_text = f"{style_instruction}: {processed_text}"
 
@@ -350,8 +361,8 @@ if api_key:
                                         prebuilt_voice_config=types.PrebuiltVoiceConfig(
                                             voice_name=selected_voice
                                         )
-                                    ),
-                                    speech_rate=speech_rate  # کنترل سرعت اضافه شد
+                                    )
+                                    # حذف speech_rate از اینجا
                                 )
                             )
                         )
@@ -375,7 +386,7 @@ if api_key:
                             if accent_parts:
                                 accent_prefix = " و ".join(accent_parts) + ":\n"
 
-                        processed_text = accent_prefix + style_prefix + text_input
+                        processed_text = accent_prefix + style_prefix + processed_text
 
                         response = client.models.generate_content(
                             model=tts_model,
@@ -402,8 +413,8 @@ if api_key:
                                                 )
                                             )
                                         ]
-                                    ),
-                                    speech_rate=speech_rate  # کنترل سرعت اضافه شد
+                                    )
+                                    # حذف speech_rate از اینجا
                                 )
                             )
                         )
@@ -435,7 +446,7 @@ if api_key:
                         st.metric("تعداد توکن‌ها", f"{token_count:.0f}")
                     with info_col3:
                         if mode == "تک‌بلندگو":
-                            st.metric("صدا", f"{selected_voice} (سرعت: {speech_rate})")
+                            st.metric("صدا", f"{selected_voice} (سرعت: {speech_rate_option})")
                         else:
                             st.metric("بلندگوها", f"{speaker1}: {voice1}, {speaker2}: {voice2}")
 
@@ -486,7 +497,7 @@ else:
 
     ### 🆕 قابلیت‌های جدید در این نسخه:
     - ✅ پشتیبانی از مدل‌های Gemini 2.5 Flash/Pro Preview TTS
-    - ✅ کنترل سرعت گفتار (۰.۵ تا ۲.۰)
+    - ✅ کنترل سرعت گفتار از طریق دستورات متنی
     - ✅ لیست به‌روز شده صداها و توصیفات
     - ✅ مدیریت خطاهای بهبود یافته
     - ✅ سازگاری کامل با مستندات جدید Gemini API
