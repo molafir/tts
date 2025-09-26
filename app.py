@@ -58,7 +58,7 @@ st.set_page_config(
 
 # 🎯 عنوان و راهنما
 st.title("🎙️ Gemini TTS Studio Pro")
-st.caption("تبدیل متن به گفتار حرفه‌ای با Gemini TTS - از تمام قابلیت‌های مستندات استفاده شده است")
+st.caption("تبدیل متن به گفتار حرفه‌ای با Gemini TTS - با پشتیبانی از لهجه‌ها")
 
 # 📚 سایدبار برای راهنما و تنظیمات پیشرفته
 with st.sidebar:
@@ -70,17 +70,18 @@ with st.sidebar:
     - `به صورت هیجان‌زده: متن شما`
     - `با صدای آرام: متن شما`
     """)
-    st.subheader("🔊 گزینه‌های صوتی")
-    st.caption("۳۰ گزینه صوتی از مستندات پشتیبانی می‌شوند")
+    st.subheader("🔊 گزینه‌های صوتی و لهجه")
+    st.caption("۳۰ گزینه صوتی و ۲۴ لهجه (کد BCP-47) از مستندات پشتیبانی می‌شوند")
     st.subheader("⚠️ محدودیت‌ها")
     st.warning("""
     - حداکثر ۳۲,۰۰۰ توکن در هر درخواست
     - فقط ورودی متنی پشتیبانی می‌شود
     - حداکثر ۲ بلندگو در حالت چندبلندگو
     - مدل‌های TTS در حالت پیش‌نمایش هستند و ممکن است ناپایدار باشند
+    - تنظیم سرعت گفتار در حال حاضر پشتیبانی نمی‌شود
     """)
-    st.subheader("🌐 زبان")
-    st.info("زبان به‌صورت خودکار تشخیص داده می‌شود، اما می‌توانید کد BCP-47 خاصی را انتخاب کنید.")
+    st.subheader("🌐 زبان و لهجه")
+    st.info("زبان و لهجه به‌صورت خودکار تشخیص داده می‌شود، اما می‌توانید کد BCP-47 خاصی را برای لهجه انتخاب کنید.")
 
 # 🔑 دریافت کلید API از کاربر
 api_key = st.text_input("🔑 کلید API Gemini خود را وارد کنید:", type="password")
@@ -104,22 +105,37 @@ if api_key:
             )
 
         with col3:
-            speech_rate = st.slider("🎤 سرعت گفتار:", 0.5, 2.0, 1.0, 0.1)
+            st.markdown("🎤 **سرعت گفتار**: در حال حاضر غیرقابل تنظیم (پیش‌فرض: 1.0)")
 
-        # 🌐 انتخاب زبان (اختیاری)
-        language_options = {
+        # 🌐 لیست لهجه‌ها (کدهای BCP-47 از مستندات TTS)
+        accent_options = {
             "تشخیص خودکار": None,
-            "فارسی": "fa-IR",
-            "انگلیسی": "en-US",
-            "عربی": "ar-EG",
-            "فرانسوی": "fr-FR",
-            "اسپانیایی": "es-US"
+            "فارسی (ایران)": "fa-IR",
+            "انگلیسی (آمریکا)": "en-US",
+            "انگلیسی (هند)": "en-IN",
+            "عربی (مصر)": "ar-EG",
+            "فرانسوی (فرانسه)": "fr-FR",
+            "اسپانیایی (آمریکا)": "es-US",
+            "آلمانی (آلمان)": "de-DE",
+            "هندی (هند)": "hi-IN",
+            "اندونزیایی (اندونزی)": "id-ID",
+            "ایتالیایی (ایتالیا)": "it-IT",
+            "ژاپنی (ژاپن)": "ja-JP",
+            "کره‌ای (کره)": "ko-KR",
+            "پرتغالی (برزیل)": "pt-BR",
+            "روسی (روسیه)": "ru-RU",
+            "هلندی (هلند)": "nl-NL",
+            "لهستانی (لهستان)": "pl-PL",
+            "تایلندی (تایلند)": "th-TH",
+            "ترکی (ترکیه)": "tr-TR",
+            "ویتنامی (ویتنام)": "vi-VN",
+            "رومانیایی (رومانی)": "ro-RO",
+            "اوکراینی (اوکراین)": "uk-UA",
+            "بنگالی (بنگلادش)": "bn-BD",
+            "مراتی (هند)": "mr-IN",
+            "تامیل (هند)": "ta-IN",
+            "تلوگو (هند)": "te-IN"
         }
-        language = st.selectbox(
-            "🌐 زبان (اختیاری - پیش‌فرض: تشخیص خودکار):",
-            list(language_options.keys()),
-            help="زبان به‌صورت خودکار تشخیص داده می‌شود، اما می‌توانید کد BCP-47 خاصی را انتخاب کنید."
-        )
 
         # 🎤 بخش تولید رونوشت خودکار
         auto_generate = st.checkbox("🤖 تولید خودکار رونوشت")
@@ -155,11 +171,11 @@ if api_key:
             گوینده۱: متن مورد نظر
             گوینده۲: پاسخ گوینده دوم
             ```
-            یا از دستورات سبک استفاده کنید:
+            یا از دستورات سبک و لهجه استفاده کنید:
             ```
-            گوینده۱ را خسته و بی‌حال و گوینده۲ را هیجان‌زده و شاد نشان بده:
+            گوینده۱ را خسته و بی‌حال با لهجه فارسی و گوینده۲ را هیجان‌زده و شاد با لهجه انگلیسی نشان بده:
             گوینده۱: خب... برنامۀ امروز چیه؟
-            گوینده۲: هرگز حدس نمی‌زنی!
+            گوینده۲: You're never going to guess!
             ```
             """)
 
@@ -201,10 +217,10 @@ if api_key:
             "Sulafat": "گرم"
         }
 
-        # 👥 بخش انتخاب صداها
+        # 👥 بخش انتخاب صداها و لهجه‌ها
         if mode == "تک‌بلندگو":
             st.subheader("👤 تنظیمات تک‌بلندگو")
-            col1, col2 = st.columns(2)
+            col1, col2, col3 = st.columns(3)
 
             with col1:
                 selected_voice = st.selectbox(
@@ -217,6 +233,14 @@ if api_key:
                 style_instruction = st.text_input(
                     "🎭 دستور سبک (اختیاری):",
                     placeholder="مثال: با لحن شاد بگو"
+                )
+
+            with col3:
+                selected_accent = st.selectbox(
+                    "🎤 لهجه (اختیاری):",
+                    list(accent_options.keys()),
+                    index=0,
+                    help="لهجه با کد BCP-47 مشخص می‌شود."
                 )
 
         else:
@@ -233,6 +257,12 @@ if api_key:
                     key="v1"
                 )
                 style1 = st.text_input("🎭 سبک گوینده ۱ (اختیاری):", placeholder="مثال: خسته و بی‌حال")
+                accent1 = st.selectbox(
+                    "🎤 لهجه گوینده ۱ (اختیاری):",
+                    list(accent_options.keys()),
+                    index=0,
+                    key="a1"
+                )
 
             with col2:
                 speaker2 = st.text_input("👤 نام گوینده ۲:", "سارا")
@@ -244,6 +274,12 @@ if api_key:
                     key="v2"
                 )
                 style2 = st.text_input("🎭 سبک گوینده ۲ (اختیاری):", placeholder="مثال: هیجان‌زده و شاد")
+                accent2 = st.selectbox(
+                    "🎤 لهجه گوینده ۲ (اختیاری):",
+                    list(accent_options.keys()),
+                    index=0,
+                    key="a2"
+                )
 
         # 📊 بررسی طول متن
         if text_input:
@@ -268,12 +304,11 @@ if api_key:
             try:
                 with st.spinner("🔮 در حال تولید صدا..."):
                     processed_text = text_input
-                    if language != "تشخیص خودکار":
-                        processed_text = f"Language {language_options[language]}: {text_input}"
-
                     if mode == "تک‌بلندگو":
+                        if selected_accent != "تشخیص خودکار":
+                            processed_text = f"Language {accent_options[selected_accent]}: {text_input}"
                         if style_instruction:
-                            processed_text = f"{style_instruction}: {text_input}"
+                            processed_text = f"{style_instruction}: {processed_text}"
 
                         response = client.models.generate_content(
                             model=tts_model,
@@ -285,21 +320,31 @@ if api_key:
                                         prebuilt_voice_config=types.PrebuiltVoiceConfig(
                                             voice_name=selected_voice
                                         )
-                                    ),
-                                    rate=speech_rate
+                                    )
                                 )
                             )
                         )
                     else:
                         style_prefix = ""
-                        if style1 or style2:
+                        accent_prefix = ""
+                        if style1 or style2 or accent1 != "تشخیص خودکار" or accent2 != "تشخیص خودکار":
                             style_parts = []
                             if style1:
                                 style_parts.append(f"{speaker1} را {style1}")
                             if style2:
                                 style_parts.append(f"{speaker2} را {style2}")
-                            style_prefix = " و ".join(style_parts) + " نشان بده:\n"
-                            processed_text = style_prefix + processed_text
+                            if style_parts:
+                                style_prefix = " و ".join(style_parts) + " نشان بده:\n"
+
+                            accent_parts = []
+                            if accent1 != "تشخیص خودکار":
+                                accent_parts.append(f"{speaker1} با لهجه {accent_options[accent1]}")
+                            if accent2 != "تشخیص خودکار":
+                                accent_parts.append(f"{speaker2} با لهجه {accent_options[accent2]}")
+                            if accent_parts:
+                                accent_prefix = " و ".join(accent_parts) + ":\n"
+
+                        processed_text = accent_prefix + style_prefix + text_input
 
                         response = client.models.generate_content(
                             model=tts_model,
@@ -326,8 +371,7 @@ if api_key:
                                                 )
                                             )
                                         ]
-                                    ),
-                                    rate=speech_rate
+                                    )
                                 )
                             )
                         )
@@ -359,14 +403,16 @@ if api_key:
                         st.metric("تعداد توکن‌ها", f"{token_count:.0f}")
                     with info_col3:
                         if mode == "تک‌بلندگو":
-                            st.metric("صدا", selected_voice)
+                            st.metric("صدا", f"{selected_voice} ({selected_accent})")
                         else:
-                            st.metric("بلندگوها", "2")
+                            st.metric("بلندگوها", f"{speaker1}: {voice1} ({accent1}), {speaker2}: {voice2} ({accent2})")
 
             except Exception as e:
                 st.error(f"❌ خطا در تولید صدا: {e}")
                 if "404" in str(e):
                     st.error(f"مدل {tts_model} در دسترس نیست. لطفاً کلید API یا دسترسی به مدل را بررسی کنید.")
+                elif "extra_forbidden" in str(e):
+                    st.error("تنظیمات غیرمجاز در API شناسایی شد. لطفاً تنظیمات را بررسی کنید.")
                 else:
                     st.info("💡 ممکن است کلید API نامعتبر باشد یا سرویس دچار مشکل شده باشد. مدل‌های TTS در حالت پیش‌نمایش هستند.")
 
