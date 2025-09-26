@@ -382,7 +382,7 @@ if api_key:
                                 f"- متن ورودی ساده و بدون دستورات پیچیده است.\n"
                                 f"- محدودیت‌های نرخ (۳ RPM، ۱۵ RPD، ۱۰۰۰۰ TPM) رعایت شده‌اند.")
                         st.warning(f"مدل {tts_model} در حالت پیش‌نمایش است. مدل gemini-2.5-pro-preview-tts را امتحان کنید.")
-                        continue
+                        
 
                     data = response.candidates[0].content.parts[0].inline_data.data
                     file_name = "output.wav"
