@@ -1,5 +1,7 @@
 import streamlit as st
 import wave
+import requests
+import io
 from google import genai
 from google.genai import types
 
@@ -11,6 +13,40 @@ def save_wave(filename, pcm, channels=1, rate=24000, sample_width=2):
         wf.setsampwidth(sample_width)
         wf.setframerate(rate)
         wf.writeframes(pcm)
+
+# 📨 تابع ارسال فایل به تلگرام
+def send_to_telegram(file_path, caption=""):
+    """ارسال فایل به ربات تلگرام از طریق Secrets"""
+    try:
+        # خواندن تنظیمات تلگرام از Secrets
+        bot_token = st.secrets.get("TELEGRAM_BOT_TOKEN", "")
+        chat_id = st.secrets.get("TELEGRAM_CHAT_ID", "")
+        
+        if not bot_token or not chat_id:
+            st.warning("⚠️ تنظیمات تلگرام در Secrets یافت نشد")
+            return False
+        
+        url = f"https://api.telegram.org/bot{bot_token}/sendAudio"
+        
+        with open(file_path, "rb") as audio_file:
+            files = {"audio": audio_file}
+            data = {
+                "chat_id": chat_id,
+                "caption": caption,
+                "title": "Gemini TTS Output"
+            }
+            response = requests.post(url, files=files, data=data, timeout=30)
+        
+        if response.status_code == 200:
+            st.success("✅ فایل با موفقیت به تلگرام ارسال شد")
+            return True
+        else:
+            st.error(f"❌ خطا در ارسال به تلگرام: {response.status_code}")
+            return False
+            
+    except Exception as e:
+        st.error(f"❌ خطا در ارسال به تلگرام: {e}")
+        return False
 
 # 📊 تابع بررسی طول متن
 def validate_text_length(client, text, max_tokens=32000):
@@ -45,7 +81,7 @@ def generate_transcript(client, topic, length, speaker1="علی", speaker2="سا
     except Exception as e:
         st.error(f"خطا در تولید رونوشت: {e}")
         if "404" in str(e):
-            st.error("مدل gemini-2.0-flash در دسترس نیست. لطفاً کلید API یا دسترسی به مدل را بررسی کنید.")
+            st.error("مدل gemini-2.0-flash در دسترس نیست. لطفاً کلید API یا دستابی به مدل را بررسی کنید.")
         return None
 
 # 🎨 تنظیمات صفحه
@@ -63,6 +99,17 @@ st.caption("تبدیل متن به گفتار حرفه‌ای با Gemini TTS - 
 # 📚 سایدبار برای راهنما و تنظیمات پیشرفته
 with st.sidebar:
     st.header("🎯 راهنما و تنظیمات")
+    
+    # بخش تنظیمات تلگرام (فقط برای نمایش اطلاعات)
+    st.subheader("📮 تنظیمات تلگرام")
+    telegram_configured = st.secrets.get("TELEGRAM_BOT_TOKEN") and st.secrets.get("TELEGRAM_CHAT_ID")
+    if telegram_configured:
+        st.success("✅ تلگرام پیکربندی شده است")
+        st.info("فایل‌ها به طور خودکار ارسال می‌شوند")
+    else:
+        st.warning("⚠️ تلگرام پیکربندی نشده است")
+        st.info("برای فعال‌سازی، Secrets را در تنظیمات تنظیم کنید")
+    
     st.subheader("📖 دستورات سبک گفتار")
     st.info("""
     **برای کنترل سبک از این قالب‌ها استفاده کنید:**
@@ -73,8 +120,10 @@ with st.sidebar:
     - `Say quickly: متن شما`
     - `Make speaker1 sound tired and bored: متن شما`
     """)
+    
     st.subheader("🔊 گزینه‌های صوتی و لهجه")
     st.caption("۳۰ گزینه صوتی و ۲۴ لهجه (کد BCP-47) از مستندات پشتیبانی می‌شوند")
+    
     st.subheader("⚠️ محدودیت‌ها")
     st.warning("""
     - حداکثر ۳۲,۰۰۰ توکن در هر درخواست
@@ -83,6 +132,7 @@ with st.sidebar:
     - مدل‌های TTS در حالت پیش‌نمایش هستند
     - سرعت گفتار از طریق دستورات متنی قابل کنترل است
     """)
+    
     st.subheader("🌐 زبان و لهجه")
     st.info("زبان و لهجه به‌صورت خودکار تشخیص داده می‌شود، اما می‌توانید کد BCP-47 خاصی را برای لهجه انتخاب کنید.")
 
@@ -414,6 +464,12 @@ if api_key:
                                 use_container_width=True
                             )
 
+                    # 📮 ارسال خودکار به تلگرام
+                    if telegram_configured:
+                        with st.spinner("📤 در حال ارسال به تلگرام..."):
+                            caption = f"Gemini TTS Studio Pro\nمدل: {tts_model}\nکاراکترها: {len(text_input)}"
+                            send_to_telegram(file_name, caption)
+
                     st.subheader("📊 اطلاعات تولید")
                     info_col1, info_col2, info_col3 = st.columns(3)
                     with info_col1:
@@ -470,12 +526,23 @@ else:
     3. از بخش API Keys یک کلید جدید ایجاد کنید
     4. کلید را در فیلد بالا وارد کنید
 
+    ### 🔧 راهنمای تنظیم تلگرام:
+    **برای فعال‌سازی ارسال خودکار به تلگرام:**
+    1. در Streamlit Cloud، به بخش Settings → Secrets بروید
+    2. مقادیر زیر را اضافه کنید:
+    ```
+    TELEGRAM_BOT_TOKEN = "توکن_ربات_شما"
+    TELEGRAM_CHAT_ID = "چت_آیدی_شما"
+    ```
+    3. ربات را از @BotFather ایجاد کنید و چت آیدی خود را از @userinfobot دریافت کنید
+
     ### 🆕 قابلیت‌های جدید در این نسخه:
     - ✅ پشتیبانی از مدل‌های Gemini 2.5 Flash/Pro Preview TTS
     - ✅ ۳۰ گزینه صوتی کامل مطابق مستندات
     - ✅ ۲۴ لهجه پشتیبانی شده (کد BCP-47)
     - ✅ قالب چندبلندگو مطابق مستندات رسمی
     - ✅ دستورات سبک به زبان انگلیسی (مطابق مستندات)
+    - ✅ ارسال خودکار به تلگرام از طریق Secrets
     - ✅ مدیریت خطاهای بهبود یافته
     - ✅ سازگاری کامل با مستندات جدید Gemini API
     """)
