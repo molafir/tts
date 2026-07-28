@@ -1,13 +1,11 @@
 import streamlit as st
 import wave
 import requests
-import io
+import base64
 from google import genai
-from google.genai import types
 
 # 🎵 تابع ذخیره wav
 def save_wave(filename, pcm, channels=1, rate=24000, sample_width=2):
-    """ذخیره فایل صوتی با پارامترهای قابل تنظیم"""
     with wave.open(filename, "wb") as wf:
         wf.setnchannels(channels)
         wf.setsampwidth(sample_width)
@@ -16,9 +14,7 @@ def save_wave(filename, pcm, channels=1, rate=24000, sample_width=2):
 
 # 📨 تابع ارسال فایل به تلگرام
 def send_to_telegram(file_path, caption=""):
-    """ارسال فایل به ربات تلگرام از طریق Secrets"""
     try:
-        # خواندن تنظیمات تلگرام از Secrets
         bot_token = st.secrets.get("TELEGRAM_BOT_TOKEN", "")
         chat_id = st.secrets.get("TELEGRAM_CHAT_ID", "")
         
@@ -27,14 +23,9 @@ def send_to_telegram(file_path, caption=""):
             return False
         
         url = f"https://api.telegram.org/bot{bot_token}/sendAudio"
-        
         with open(file_path, "rb") as audio_file:
             files = {"audio": audio_file}
-            data = {
-                "chat_id": chat_id,
-                "caption": caption,
-                "title": "Gemini TTS Output"
-            }
+            data = {"chat_id": chat_id, "caption": caption, "title": "Gemini TTS"}
             response = requests.post(url, files=files, data=data, timeout=30)
         
         if response.status_code == 200:
@@ -43,14 +34,12 @@ def send_to_telegram(file_path, caption=""):
         else:
             st.error(f"❌ خطا در ارسال به تلگرام: {response.status_code}")
             return False
-            
     except Exception as e:
         st.error(f"❌ خطا در ارسال به تلگرام: {e}")
         return False
 
 # 📊 تابع بررسی طول متن
 def validate_text_length(client, text, max_tokens=32000):
-    """بررسی محدودیت طول متن بر اساس توکن با استفاده از API"""
     try:
         token_count = client.models.count_tokens(
             model="gemini-2.0-flash", contents=text
@@ -58,14 +47,12 @@ def validate_text_length(client, text, max_tokens=32000):
         return token_count <= max_tokens, token_count
     except Exception as e:
         st.error(f"خطا در شمارش توکن‌ها: {e}")
-        # در صورت خطا، تخمین تقریبی
         estimated_tokens = len(text) / 4
         st.warning("شمارش توکن‌ها تقریبی است (۴ کاراکتر ≈ ۱ توکن).")
         return estimated_tokens <= max_tokens, estimated_tokens
 
 # 🎭 تابع تولید رونوشت خودکار
 def generate_transcript(client, topic, length, speaker1="علی", speaker2="سارا", style="پادکست"):
-    """تولید خودکار رونوشت با Gemini"""
     prompt = f"""
     یک مکالمه {style} حدود {length} کلمه بین {speaker1} و {speaker2} درباره "{topic}" ایجاد کن.
     قالب خروجی باید به این شکل باشد:
@@ -80,8 +67,6 @@ def generate_transcript(client, topic, length, speaker1="علی", speaker2="سا
         return response.text
     except Exception as e:
         st.error(f"خطا در تولید رونوشت: {e}")
-        if "404" in str(e):
-            st.error("مدل gemini-2.0-flash در دسترس نیست. لطفاً کلید API یا دستابی به مدل را بررسی کنید.")
         return None
 
 # 🎨 تنظیمات صفحه
@@ -92,23 +77,19 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# 🎯 عنوان و راهنما
 st.title("🎙️ Gemini TTS Studio Pro")
-st.caption("تبدیل متن به گفتار حرفه‌ای با Gemini TTS - نسخه به‌روز شده بر اساس مستندات رسمی")
+st.caption("تبدیل متن به گفتار حرفه‌ای با Gemini TTS - نسخه مبتنی بر Interactions API")
 
-# 📚 سایدبار برای راهنما و تنظیمات پیشرفته
+# 📚 سایدبار
 with st.sidebar:
     st.header("🎯 راهنما و تنظیمات")
     
-    # بخش تنظیمات تلگرام (فقط برای نمایش اطلاعات)
     st.subheader("📮 تنظیمات تلگرام")
     telegram_configured = st.secrets.get("TELEGRAM_BOT_TOKEN") and st.secrets.get("TELEGRAM_CHAT_ID")
     if telegram_configured:
         st.success("✅ تلگرام پیکربندی شده است")
-        st.info("فایل‌ها به طور خودکار ارسال می‌شوند")
     else:
         st.warning("⚠️ تلگرام پیکربندی نشده است")
-        st.info("برای فعال‌سازی، Secrets را در تنظیمات تنظیم کنید")
     
     st.subheader("📖 دستورات سبک گفتار")
     st.info("""
@@ -132,18 +113,15 @@ with st.sidebar:
     - مدل‌های TTS در حالت پیش‌نمایش هستند
     - سرعت گفتار از طریق دستورات متنی قابل کنترل است
     """)
-    
-    st.subheader("🌐 زبان و لهجه")
-    st.info("زبان و لهجه به‌صورت خودکار تشخیص داده می‌شود، اما می‌توانید کد BCP-47 خاصی را برای لهجه انتخاب کنید.")
 
-# 🔑 دریافت کلید API از کاربر
+# 🔑 دریافت کلید API
 api_key = st.text_input("🔑 کلید API Gemini خود را وارد کنید:", type="password")
 
 if api_key:
     try:
         client = genai.Client(api_key=api_key)
 
-        # 🎛️ بخش تنظیمات پیشرفته
+        # 🎛️ تنظیمات پیشرفته
         st.header("⚙️ تنظیمات پیشرفته")
         col1, col2, col3 = st.columns(3)
 
@@ -153,7 +131,7 @@ if api_key:
         with col2:
             tts_model = st.selectbox(
                 "🤖 مدل TTS:",
-                ["gemini-2.5-flash-preview-tts", "gemini-2.5-pro-preview-tts"],
+                ["gemini-2.5-flash-tts-preview", "gemini-2.5-pro-tts-preview", "gemini-3.1-flash-tts-preview"],
                 help="مدل‌های TTS در حالت پیش‌نمایش هستند."
             )
 
@@ -164,7 +142,6 @@ if api_key:
                 help="سرعت گفتار از طریق دستورات متنی کنترل می‌شود"
             )
             
-            # نگاشت سرعت به دستورات متنی مطابق مستندات
             speed_commands = {
                 "پیش‌فرض": "",
                 "آهسته": "Say slowly",
@@ -172,7 +149,7 @@ if api_key:
                 "سریع": "Say quickly"
             }
 
-        # 🌐 لیست کامل لهجه‌ها (کدهای BCP-47 از مستندات TTS)
+        # 🌐 لهجه‌ها
         accent_options = {
             "تشخیص خودکار": None,
             "عربی (مصر)": "ar-EG", "آلمانی (آلمان)": "de-DE", "انگلیسی (آمریکا)": "en-US",
@@ -185,7 +162,7 @@ if api_key:
             "انگلیسی (هند)": "en-IN", "مراتی (هند)": "mr-IN", "تامیل (هند)": "ta-IN", "تلوگو (هند)": "te-IN"
         }
 
-        # 🔊 لیست کامل گزینه‌های صوتی (۳۰ گزینه مطابق مستندات)
+        # 🔊 لیست صداها
         all_voices = [
             "Zephyr", "Puck", "Charon", "Kore", "Fenrir", "Leda", 
             "Orus", "Aoede", "Callirrhoe", "Autonoe", "Enceladus", "Iapetus",
@@ -194,7 +171,6 @@ if api_key:
             "Achird", "Zubenelgenubi", "Vindemiatrix", "Sadachbia", "Sadaltager", "Sulafat"
         ]
 
-        # 🎵 توصیفات صداها (مطابق مستندات رسمی)
         voice_descriptions = {
             "Zephyr": "Bright", "Puck": "Upbeat", "Charon": "Informative",
             "Kore": "Firm", "Fenrir": "Excitable", "Leda": "Youthful",
@@ -208,7 +184,7 @@ if api_key:
             "Sadachbia": "Lively", "Sadaltager": "Knowledgeable", "Sulafat": "Warm"
         }
 
-        # 🎤 بخش تولید رونوشت خودکار
+        # 🎤 تولید خودکار رونوشت
         auto_generate = st.checkbox("🤖 تولید خودکار رونوشت")
         if auto_generate:
             st.subheader("🤖 تولید خودکار رونوشت")
@@ -233,12 +209,12 @@ if api_key:
                         st.session_state.generated_transcript = transcript
                         st.success("رونوشت با موفقیت تولید شد!")
 
-        # 📝 بخش متن ورودی
+        # 📝 متن ورودی
         st.header("📝 متن ورودی")
         
         if mode == "چندبلندگو":
             st.info("""
-            **قالب پیشنهادی برای چندبلندگو (مطابق مستندات):**
+            **قالب پیشنهادی برای چندبلندگو:**
             ```
             TTS the following conversation between علی and سارا:
             علی: سلام سارا! امروز چطوری؟
@@ -263,10 +239,10 @@ if api_key:
             text_input = st.text_area(
                 "📝 متن مورد نظر:",
                 height=200,
-                placeholder='مثال: Say cheerfully: Have a wonderful day! یا برای چندبلندگو از قالب بالا استفاده کنید'
+                placeholder='مثال: Say cheerfully: Have a wonderful day!'
             )
 
-        # 👥 بخش انتخاب صداها و لهجه‌ها
+        # 👥 انتخاب صداها
         if mode == "تک‌بلندگو":
             st.subheader("👤 تنظیمات تک‌بلندگو")
             col1, col2, col3 = st.columns(3)
@@ -289,8 +265,7 @@ if api_key:
                 selected_accent = st.selectbox(
                     "🎤 لهجه (اختیاری):",
                     list(accent_options.keys()),
-                    index=0,
-                    help="لهجه با کد BCP-47 مشخص می‌شود."
+                    index=0
                 )
 
         else:
@@ -335,12 +310,9 @@ if api_key:
         if text_input:
             is_valid, token_count = validate_text_length(client, text_input)
             progress = min(token_count / 32000, 1.0)
-
             st.progress(progress)
-
             if not is_valid:
                 st.error(f"❌ متن بسیار طولانی! تعداد توکن‌ها: {token_count:.0f} از 32,000")
-                st.warning("لطفاً متن را کوتاه کنید.")
             else:
                 st.success(f"✅ طول متن مناسب است. تعداد توکن‌ها: {token_count:.0f} از 32,000")
 
@@ -355,48 +327,37 @@ if api_key:
                 with st.spinner("🔮 در حال تولید صدا..."):
                     processed_text = text_input
                     
-                    # افزودن دستور سرعت به متن (اگر انتخاب شده باشد)
+                    # افزودن دستور سرعت
                     speed_command = speed_commands[speech_rate_option]
                     if speed_command:
                         processed_text = f"{speed_command}: {processed_text}"
                     
                     if mode == "تک‌بلندگو":
-                        # افزودن دستورات سبک و لهجه به صورت متنی
                         if style_instruction:
                             processed_text = f"{style_instruction}: {processed_text}"
-                        
                         if selected_accent != "تشخیص خودکار":
                             processed_text = f"Language {accent_options[selected_accent]}: {processed_text}"
 
-                        response = client.models.generate_content(
+                        # استفاده از Interactions API
+                        interaction = client.interactions.create(
                             model=tts_model,
-                            contents=processed_text,
-                            config=types.GenerateContentConfig(
-                                response_modalities=["AUDIO"],
-                                speech_config=types.SpeechConfig(
-                                    voice_config=types.VoiceConfig(
-                                        prebuilt_voice_config=types.PrebuiltVoiceConfig(
-                                            voice_name=selected_voice
-                                        )
-                                    )
-                                )
-                            )
+                            input=processed_text,
+                            response_format={"type": "audio"},
+                            generation_config={
+                                "speech_config": [{"voice": selected_voice}]
+                            }
                         )
                     else:
-                        # ساخت قالب چندبلندگو مطابق مستندات
-                        style_prefix = ""
-                        accent_prefix = ""
-                        
-                        # ساخت پیشوند دستورات سبک
+                        # ساخت پیشوند برای چندبلندگو
+                        prefix_parts = []
                         if style1 or style2:
                             style_parts = []
                             if style1:
                                 style_parts.append(f"Make {speaker1} sound {style1}")
                             if style2:
                                 style_parts.append(f"{speaker2} sound {style2}")
-                            style_prefix = " and ".join(style_parts) + ":\n"
-                        
-                        # ساخت پیشوند دستورات لهجه
+                            if style_parts:
+                                prefix_parts.append(" and ".join(style_parts) + ":\n")
                         if accent1 != "تشخیص خودکار" or accent2 != "تشخیص خودکار":
                             accent_parts = []
                             if accent1 != "تشخیص خودکار":
@@ -404,53 +365,31 @@ if api_key:
                             if accent2 != "تشخیص خودکار":
                                 accent_parts.append(f"{speaker2} with {accent_options[accent2]} accent")
                             if accent_parts:
-                                accent_prefix = " and ".join(accent_parts) + ":\n"
+                                prefix_parts.append(" and ".join(accent_parts) + ":\n")
                         
-                        # ترکیب تمام پیشوندها
-                        prefix = accent_prefix + style_prefix
-                        if prefix:
-                            processed_text = prefix + processed_text
-                        
-                        # اضافه کردن قالب TTS برای چندبلندگو
+                        prefix = "".join(prefix_parts)
+                        processed_text = prefix + processed_text
                         if not processed_text.startswith("TTS the following conversation"):
                             processed_text = f"TTS the following conversation between {speaker1} and {speaker2}:\n{processed_text}"
 
-                        response = client.models.generate_content(
+                        speech_config = [
+                            {"speaker": speaker1, "voice": voice1},
+                            {"speaker": speaker2, "voice": voice2}
+                        ]
+                        interaction = client.interactions.create(
                             model=tts_model,
-                            contents=processed_text,
-                            config=types.GenerateContentConfig(
-                                response_modalities=["AUDIO"],
-                                speech_config=types.SpeechConfig(
-                                    multi_speaker_voice_config=types.MultiSpeakerVoiceConfig(
-                                        speaker_voice_configs=[
-                                            types.SpeakerVoiceConfig(
-                                                speaker=speaker1,
-                                                voice_config=types.VoiceConfig(
-                                                    prebuilt_voice_config=types.PrebuiltVoiceConfig(
-                                                        voice_name=voice1
-                                                    )
-                                                )
-                                            ),
-                                            types.SpeakerVoiceConfig(
-                                                speaker=speaker2,
-                                                voice_config=types.VoiceConfig(
-                                                    prebuilt_voice_config=types.PrebuiltVoiceConfig(
-                                                        voice_name=voice2
-                                                    )
-                                                )
-                                            )
-                                        ]
-                                    )
-                                )
-                            )
+                            input=processed_text,
+                            response_format={"type": "audio"},
+                            generation_config={"speech_config": speech_config}
                         )
 
-                    data = response.candidates[0].content.parts[0].inline_data.data
+                    # استخراج داده صوتی (base64)
+                    audio_b64 = interaction.output_audio.data
+                    pcm_data = base64.b64decode(audio_b64)
                     file_name = "output.wav"
-                    save_wave(file_name, data)
+                    save_wave(file_name, pcm_data)
 
                     st.success("✅ تولید صدا با موفقیت انجام شد!")
-
                     col1, col2 = st.columns([2, 1])
                     with col1:
                         st.audio(file_name, format="audio/wav")
@@ -464,12 +403,13 @@ if api_key:
                                 use_container_width=True
                             )
 
-                    # 📮 ارسال خودکار به تلگرام
+                    # ارسال به تلگرام
                     if telegram_configured:
                         with st.spinner("📤 در حال ارسال به تلگرام..."):
                             caption = f"Gemini TTS Studio Pro\nمدل: {tts_model}\nکاراکترها: {len(text_input)}"
                             send_to_telegram(file_name, caption)
 
+                    # نمایش اطلاعات
                     st.subheader("📊 اطلاعات تولید")
                     info_col1, info_col2, info_col3 = st.columns(3)
                     with info_col1:
@@ -484,14 +424,14 @@ if api_key:
 
             except Exception as e:
                 st.error(f"❌ خطا در تولید صدا: {e}")
-                if "404" in str(e) or "model_not_found" in str(e):
-                    st.error(f"مدل {tts_model} در دسترس نیست. لطفاً کلید API یا دسترسی به مدل را بررسی کنید.")
-                elif "extra_forbidden" in str(e):
-                    st.error("تنظیمات غیرمجاز در API شناسایی شد. لطفاً تنظیمات را بررسی کنید.")
+                if "model_not_found" in str(e).lower():
+                    st.error(f"مدل {tts_model} در دسترس نیست. لطفاً دسترسی یا نام مدل را بررسی کنید.")
+                elif "extra_forbidden" in str(e).lower():
+                    st.error("تنظیمات غیرمجاز در API شناسایی شد.")
                 else:
-                    st.info("💡 ممکن است کلید API نامعتبر باشد یا سرویس دچار مشکل شده باشد. مدل‌های TTS در حالت پیش‌نمایش هستند.")
+                    st.info("💡 ممکن است کلید API نامعتبر باشد یا سرویس دچار مشکل شده باشد.")
 
-        # 📚 بخش نمونه‌های آماده
+        # 📚 نمونه‌های آماده
         st.header("🎭 نمونه‌های آماده")
         sample_col1, sample_col2, sample_col3 = st.columns(3)
 
@@ -535,14 +475,4 @@ else:
     TELEGRAM_CHAT_ID = "چت_آیدی_شما"
     ```
     3. ربات را از @BotFather ایجاد کنید و چت آیدی خود را از @userinfobot دریافت کنید
-
-    ### 🆕 قابلیت‌های جدید در این نسخه:
-    - ✅ پشتیبانی از مدل‌های Gemini 2.5 Flash/Pro Preview TTS
-    - ✅ ۳۰ گزینه صوتی کامل مطابق مستندات
-    - ✅ ۲۴ لهجه پشتیبانی شده (کد BCP-47)
-    - ✅ قالب چندبلندگو مطابق مستندات رسمی
-    - ✅ دستورات سبک به زبان انگلیسی (مطابق مستندات)
-    - ✅ ارسال خودکار به تلگرام از طریق Secrets
-    - ✅ مدیریت خطاهای بهبود یافته
-    - ✅ سازگاری کامل با مستندات جدید Gemini API
     """)
