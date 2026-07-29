@@ -78,7 +78,7 @@ st.set_page_config(
 )
 
 st.title("🎙️ Gemini TTS Studio Pro")
-st.caption("تبدیل متن به گفتار حرفه‌ای با Gemini TTS - نسخه مبتنی بر Interactions API")
+st.caption("تبدیل متن به گفتار حرفه‌ای با Gemini TTS - مبتنی بر Interactions API")
 
 # 📚 سایدبار
 with st.sidebar:
@@ -102,15 +102,11 @@ with st.sidebar:
     - `Make speaker1 sound tired and bored: متن شما`
     """)
     
-    st.subheader("🔊 گزینه‌های صوتی و لهجه")
-    st.caption("۳۰ گزینه صوتی و ۲۴ لهجه (کد BCP-47) از مستندات پشتیبانی می‌شوند")
-    
     st.subheader("⚠️ محدودیت‌ها")
     st.warning("""
-    - حداکثر ۳۲,۰۰۰ توکن در هر درخواست
+    - حداکثر ۳۲,۰۰۰ توکن (مدل‌های Flash)، ۸,۱۹۲ توکن (مدل Pro)
     - فقط ورودی متنی پشتیبانی می‌شود
     - حداکثر ۲ بلندگو در حالت چندبلندگو
-    - مدل‌های TTS در حالت پیش‌نمایش هستند
     - سرعت گفتار از طریق دستورات متنی قابل کنترل است
     """)
 
@@ -131,15 +127,18 @@ if api_key:
         with col2:
             tts_model = st.selectbox(
                 "🤖 مدل TTS:",
-                ["gemini-2.5-flash-tts-preview", "gemini-2.5-pro-tts-preview", "gemini-3.1-flash-tts-preview"],
-                help="مدل‌های TTS در حالت پیش‌نمایش هستند."
+                [
+                    "gemini-2.5-flash-tts-preview",
+                    "gemini-3.1-flash-tts-preview",
+                    "gemini-2.5-pro-preview-tts"   # نام صحیح مطابق مستندات رسمی
+                ],
+                help="مدل Pro کیفیت بالاتری دارد اما محدودیت ورودی آن ۸,۱۹۲ توکن است."
             )
 
         with col3:
             speech_rate_option = st.selectbox(
                 "🎚️ سرعت گفتار:",
                 ["پیش‌فرض", "آهسته", "متوسط", "سریع"],
-                help="سرعت گفتار از طریق دستورات متنی کنترل می‌شود"
             )
             
             speed_commands = {
@@ -189,19 +188,12 @@ if api_key:
         if auto_generate:
             st.subheader("🤖 تولید خودکار رونوشت")
             gen_col1, gen_col2, gen_col3 = st.columns(3)
-
             with gen_col1:
                 topic = st.text_input("🎯 موضوع مکالمه:", "تکنولوژی و هوش مصنوعی")
-
             with gen_col2:
-                style = st.selectbox(
-                    "📝 سبک رونوشت:",
-                    ["پادکست", "مصاحبه", "گفتگوی دوستانه", "بحث علمی", "داستان"]
-                )
-
+                style = st.selectbox("📝 سبک رونوشت:", ["پادکست", "مصاحبه", "گفتگوی دوستانه", "بحث علمی", "داستان"])
             with gen_col3:
                 length = st.slider("📏 طول رونوشت (کلمه):", 50, 300, 150)
-
             if st.button("🪄 تولید رونوشت", key="generate_transcript"):
                 with st.spinner("در حال تولید رونوشت..."):
                     transcript = generate_transcript(client, topic, length, style=style)
@@ -211,7 +203,6 @@ if api_key:
 
         # 📝 متن ورودی
         st.header("📝 متن ورودی")
-        
         if mode == "چندبلندگو":
             st.info("""
             **قالب پیشنهادی برای چندبلندگو:**
@@ -220,114 +211,63 @@ if api_key:
             علی: سلام سارا! امروز چطوری؟
             سارا: سلام علی! خوبم ممنون. تو چطور؟
             ```
-            **یا با دستورات سبک:**
-            ```
-            Make علی sound tired and bored, and سارا sound excited and happy:
-            علی: So... what's on the agenda today?
-            سارا: You're never going to guess!
-            ```
             """)
 
         if 'generated_transcript' in st.session_state and auto_generate:
-            text_input = st.text_area(
-                "📝 متن مورد نظر:",
-                value=st.session_state.generated_transcript,
-                height=200,
-                placeholder='مثال: Say cheerfully: Have a wonderful day!'
-            )
+            text_input = st.text_area("📝 متن مورد نظر:", value=st.session_state.generated_transcript, height=200)
         else:
-            text_input = st.text_area(
-                "📝 متن مورد نظر:",
-                height=200,
-                placeholder='مثال: Say cheerfully: Have a wonderful day!'
-            )
+            text_input = st.text_area("📝 متن مورد نظر:", height=200,
+                                      placeholder='مثال: Say cheerfully: Have a wonderful day!')
 
         # 👥 انتخاب صداها
         if mode == "تک‌بلندگو":
             st.subheader("👤 تنظیمات تک‌بلندگو")
             col1, col2, col3 = st.columns(3)
-
             with col1:
-                selected_voice = st.selectbox(
-                    "انتخاب صدا:",
-                    options=all_voices,
-                    format_func=lambda x: f"{x} - {voice_descriptions.get(x, '')}",
-                    index=all_voices.index("Kore")
-                )
-
+                selected_voice = st.selectbox("انتخاب صدا:", options=all_voices,
+                                              format_func=lambda x: f"{x} - {voice_descriptions.get(x, '')}",
+                                              index=all_voices.index("Kore"))
             with col2:
-                style_instruction = st.text_input(
-                    "🎭 دستور سبک (اختیاری):",
-                    placeholder='مثال: Say cheerfully'
-                )
-
+                style_instruction = st.text_input("🎭 دستور سبک (اختیاری):", placeholder='مثال: Say cheerfully')
             with col3:
-                selected_accent = st.selectbox(
-                    "🎤 لهجه (اختیاری):",
-                    list(accent_options.keys()),
-                    index=0
-                )
-
+                selected_accent = st.selectbox("🎤 لهجه (اختیاری):", list(accent_options.keys()), index=0)
         else:
             st.subheader("👥 تنظیمات چندبلندگو")
             col1, col2 = st.columns(2)
-
             with col1:
                 speaker1 = st.text_input("👤 نام گوینده ۱:", "علی")
-                voice1 = st.selectbox(
-                    "صدا گوینده ۱:",
-                    options=all_voices,
-                    index=all_voices.index("Kore"),
-                    format_func=lambda x: f"{x} - {voice_descriptions.get(x, '')}",
-                    key="v1"
-                )
+                voice1 = st.selectbox("صدا گوینده ۱:", options=all_voices,
+                                      index=all_voices.index("Kore"),
+                                      format_func=lambda x: f"{x} - {voice_descriptions.get(x, '')}", key="v1")
                 style1 = st.text_input("🎭 سبک گوینده ۱ (اختیاری):", placeholder="مثال: tired and bored")
-                accent1 = st.selectbox(
-                    "🎤 لهجه گوینده ۱ (اختیاری):",
-                    list(accent_options.keys()),
-                    index=0,
-                    key="a1"
-                )
-
+                accent1 = st.selectbox("🎤 لهجه گوینده ۱ (اختیاری):", list(accent_options.keys()), index=0, key="a1")
             with col2:
                 speaker2 = st.text_input("👤 نام گوینده ۲:", "سارا")
-                voice2 = st.selectbox(
-                    "صدا گوینده ۲:",
-                    options=all_voices,
-                    index=all_voices.index("Puck"),
-                    format_func=lambda x: f"{x} - {voice_descriptions.get(x, '')}",
-                    key="v2"
-                )
+                voice2 = st.selectbox("صدا گوینده ۲:", options=all_voices,
+                                      index=all_voices.index("Puck"),
+                                      format_func=lambda x: f"{x} - {voice_descriptions.get(x, '')}", key="v2")
                 style2 = st.text_input("🎭 سبک گوینده ۲ (اختیاری):", placeholder="مثال: excited and happy")
-                accent2 = st.selectbox(
-                    "🎤 لهجه گوینده ۲ (اختیاری):",
-                    list(accent_options.keys()),
-                    index=0,
-                    key="a2"
-                )
+                accent2 = st.selectbox("🎤 لهجه گوینده ۲ (اختیاری):", list(accent_options.keys()), index=0, key="a2")
+
+        # تعیین محدودیت توکن بر اساس مدل
+        max_tokens = 8192 if "pro" in tts_model else 32000
 
         # 📊 بررسی طول متن
         if text_input:
-            is_valid, token_count = validate_text_length(client, text_input)
-            progress = min(token_count / 32000, 1.0)
+            is_valid, token_count = validate_text_length(client, text_input, max_tokens)
+            progress = min(token_count / max_tokens, 1.0)
             st.progress(progress)
             if not is_valid:
-                st.error(f"❌ متن بسیار طولانی! تعداد توکن‌ها: {token_count:.0f} از 32,000")
+                st.error(f"❌ متن بسیار طولانی! تعداد توکن‌ها: {token_count:.0f} از {max_tokens}")
             else:
-                st.success(f"✅ طول متن مناسب است. تعداد توکن‌ها: {token_count:.0f} از 32,000")
+                st.success(f"✅ طول متن مناسب است. تعداد توکن‌ها: {token_count:.0f} از {max_tokens}")
 
         # 🎧 دکمه تولید صدا
-        if st.button(
-            "🎧 تولید صدا",
-            type="primary",
-            use_container_width=True,
-            disabled=not text_input.strip() or (text_input and not is_valid)
-        ):
+        if st.button("🎧 تولید صدا", type="primary", use_container_width=True,
+                     disabled=not text_input.strip() or (text_input and not is_valid)):
             try:
                 with st.spinner("🔮 در حال تولید صدا..."):
                     processed_text = text_input
-                    
-                    # افزودن دستور سرعت
                     speed_command = speed_commands[speech_rate_option]
                     if speed_command:
                         processed_text = f"{speed_command}: {processed_text}"
@@ -338,7 +278,6 @@ if api_key:
                         if selected_accent != "تشخیص خودکار":
                             processed_text = f"Language {accent_options[selected_accent]}: {processed_text}"
 
-                        # استفاده از Interactions API
                         interaction = client.interactions.create(
                             model=tts_model,
                             input=processed_text,
@@ -348,25 +287,17 @@ if api_key:
                             }
                         )
                     else:
-                        # ساخت پیشوند برای چندبلندگو
                         prefix_parts = []
                         if style1 or style2:
                             style_parts = []
-                            if style1:
-                                style_parts.append(f"Make {speaker1} sound {style1}")
-                            if style2:
-                                style_parts.append(f"{speaker2} sound {style2}")
-                            if style_parts:
-                                prefix_parts.append(" and ".join(style_parts) + ":\n")
+                            if style1: style_parts.append(f"Make {speaker1} sound {style1}")
+                            if style2: style_parts.append(f"{speaker2} sound {style2}")
+                            if style_parts: prefix_parts.append(" and ".join(style_parts) + ":\n")
                         if accent1 != "تشخیص خودکار" or accent2 != "تشخیص خودکار":
                             accent_parts = []
-                            if accent1 != "تشخیص خودکار":
-                                accent_parts.append(f"{speaker1} with {accent_options[accent1]} accent")
-                            if accent2 != "تشخیص خودکار":
-                                accent_parts.append(f"{speaker2} with {accent_options[accent2]} accent")
-                            if accent_parts:
-                                prefix_parts.append(" and ".join(accent_parts) + ":\n")
-                        
+                            if accent1 != "تشخیص خودکار": accent_parts.append(f"{speaker1} with {accent_options[accent1]} accent")
+                            if accent2 != "تشخیص خودکار": accent_parts.append(f"{speaker2} with {accent_options[accent2]} accent")
+                            if accent_parts: prefix_parts.append(" and ".join(accent_parts) + ":\n")
                         prefix = "".join(prefix_parts)
                         processed_text = prefix + processed_text
                         if not processed_text.startswith("TTS the following conversation"):
@@ -383,7 +314,7 @@ if api_key:
                             generation_config={"speech_config": speech_config}
                         )
 
-                    # استخراج داده صوتی (base64)
+                    # ذخیره صدا
                     audio_b64 = interaction.output_audio.data
                     pcm_data = base64.b64decode(audio_b64)
                     file_name = "output.wav"
@@ -395,21 +326,14 @@ if api_key:
                         st.audio(file_name, format="audio/wav")
                     with col2:
                         with open(file_name, "rb") as f:
-                            st.download_button(
-                                "⬇️ دانلود فایل صوتی",
-                                data=f,
-                                file_name=file_name,
-                                mime="audio/wav",
-                                use_container_width=True
-                            )
+                            st.download_button("⬇️ دانلود فایل صوتی", data=f, file_name=file_name, mime="audio/wav",
+                                               use_container_width=True)
 
-                    # ارسال به تلگرام
                     if telegram_configured:
                         with st.spinner("📤 در حال ارسال به تلگرام..."):
                             caption = f"Gemini TTS Studio Pro\nمدل: {tts_model}\nکاراکترها: {len(text_input)}"
                             send_to_telegram(file_name, caption)
 
-                    # نمایش اطلاعات
                     st.subheader("📊 اطلاعات تولید")
                     info_col1, info_col2, info_col3 = st.columns(3)
                     with info_col1:
@@ -424,55 +348,26 @@ if api_key:
 
             except Exception as e:
                 st.error(f"❌ خطا در تولید صدا: {e}")
-                if "model_not_found" in str(e).lower():
-                    st.error(f"مدل {tts_model} در دسترس نیست. لطفاً دسترسی یا نام مدل را بررسی کنید.")
-                elif "extra_forbidden" in str(e).lower():
-                    st.error("تنظیمات غیرمجاز در API شناسایی شد.")
-                else:
-                    st.info("💡 ممکن است کلید API نامعتبر باشد یا سرویس دچار مشکل شده باشد.")
 
         # 📚 نمونه‌های آماده
         st.header("🎭 نمونه‌های آماده")
         sample_col1, sample_col2, sample_col3 = st.columns(3)
-
         with sample_col1:
             if st.button("نمونه تک‌بلندگو - خوش‌آمدگویی", use_container_width=True):
-                st.session_state.sample_text = 'Say cheerfully: Have a wonderful day! Welcome to Gemini TTS Studio Pro!'
-
+                st.session_state.sample_text = 'Say cheerfully: Have a wonderful day!'
         with sample_col2:
             if st.button("نمونه چندبلندگو - گفتگوی روزمره", use_container_width=True):
                 st.session_state.sample_text = f"""TTS the following conversation between {speaker1} and {speaker2}:
 {speaker1}: سلام! امروز چطوری؟
 {speaker2}: خوبم ممنون. تو چطور؟"""
-
         with sample_col3:
             if st.button("نمونه دراماتیک - داستان", use_container_width=True):
-                st.session_state.sample_text = 'Say in a dramatic voice: In a land far away, a hero embarked on an epic journey filled with challenges and triumphs.'
+                st.session_state.sample_text = 'Say in a dramatic voice: In a land far away, a hero embarked on an epic journey.'
 
         if 'sample_text' in st.session_state:
             text_input = st.text_area("📝 متن مورد نظر:", st.session_state.sample_text, height=150, key="sample_text_area")
 
-    except ValueError as e:
-        st.error(f"❌ خطای کلید API: کلید نامعتبر است. لطفاً کلید را بررسی کنید.")
     except Exception as e:
         st.error(f"❌ خطا در اتصال به API: {e}")
-        st.info("🔑 لطفاً از صحت کلید API اطمینان حاصل کنید")
 else:
     st.info("🔐 برای شروع، کلید API خود را وارد کنید.")
-    st.markdown("""
-    ### 📋 راهنمای دریافت کلید API:
-    1. به Google AI Studio بروید
-    2. وارد حساب Google خود شوید
-    3. از بخش API Keys یک کلید جدید ایجاد کنید
-    4. کلید را در فیلد بالا وارد کنید
-
-    ### 🔧 راهنمای تنظیم تلگرام:
-    **برای فعال‌سازی ارسال خودکار به تلگرام:**
-    1. در Streamlit Cloud، به بخش Settings → Secrets بروید
-    2. مقادیر زیر را اضافه کنید:
-    ```
-    TELEGRAM_BOT_TOKEN = "توکن_ربات_شما"
-    TELEGRAM_CHAT_ID = "چت_آیدی_شما"
-    ```
-    3. ربات را از @BotFather ایجاد کنید و چت آیدی خود را از @userinfobot دریافت کنید
-    """)
