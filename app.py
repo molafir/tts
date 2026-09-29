@@ -96,7 +96,7 @@ def generate_transcript(client, topic, length, speaker1, speaker2, style):
 # ============================================================
 
 def clean_text(text):
-    """حذف نشانه‌های Markdown و کاراکترهای اضافی."""
+    """حذف نشانه‌های Markdown."""
     cleaned = []
     for ln in text.splitlines():
         s = re.sub(r"^[\*\_\s]+", "", ln)
@@ -260,57 +260,27 @@ VOICE_DESCRIPTIONS = {
     "Sadachbia": "سرزنده", "Sadaltager": "آگاه", "Sulafat": "گرم",
 }
 
+# ✅ فقط مدل‌های ۳.۸ که از Interactions API و speech_metadata پشتیبانی می‌کنند
 MODELS = [
     "gemini-3.8-flash-tts",
     "gemini-3.8-flash-lite-tts",
-    "gemini-3.1-flash-tts-preview",
-    "gemini-2.5-pro-preview-tts",
 ]
 
-# ============================================================
-# 🎯 فرمت‌های خروجی پشتیبانی‌شده برای هر مدل
-# ============================================================
-
-MODEL_MIME_SUPPORT = {
-    "gemini-3.8-flash-tts": {
-        "WAV (پیش‌فرض)": "audio/wav",
-        "PCM خطی L16": "audio/l16",
-        "mu-law (تلفن آمریکا)": "audio/mulaw",
-        "A-law (تلفن اروپا)": "audio/alaw",
-    },
-    "gemini-3.8-flash-lite-tts": {
-        "WAV (پیش‌فرض)": "audio/wav",
-        "PCM خطی L16": "audio/l16",
-        "mu-law (تلفن آمریکا)": "audio/mulaw",
-        "A-law (تلفن اروپا)": "audio/alaw",
-    },
-    "gemini-3.1-flash-tts-preview": {
-        "WAV (پیش‌فرض)": "audio/wav",
-        "PCM خطی L16": "audio/l16",
-        "MP3 (فشرده)": "audio/mp3",
-        "Ogg Opus": "audio/ogg_opus",
-        "mu-law (تلفن آمریکا)": "audio/mulaw",
-        "A-law (تلفن اروپا)": "audio/alaw",
-    },
-    "gemini-2.5-pro-preview-tts": {
-        "WAV (پیش‌فرض)": "audio/wav",
-        "PCM خطی L16": "audio/l16",
-        "MP3 (فشرده)": "audio/mp3",
-        "Ogg Opus": "audio/ogg_opus",
-        "mu-law (تلفن آمریکا)": "audio/mulaw",
-        "A-law (تلفن اروپا)": "audio/alaw",
-    },
+# فرمت‌های خروجی مجاز برای مدل‌های ۳.۸ (بدون MP3 و Ogg Opus)
+MIME_TYPES = {
+    "WAV (پیش‌فرض)": "audio/wav",
+    "PCM خطی L16": "audio/l16",
+    "mu-law (تلفن آمریکا)": "audio/mulaw",
+    "A-law (تلفن اروپا)": "audio/alaw",
 }
 
 EXT_MAP = {
-    "audio/wav": "wav", "audio/l16": "pcm", "audio/mp3": "mp3",
-    "audio/ogg_opus": "opus", "audio/mulaw": "mulaw", "audio/alaw": "alaw",
+    "audio/wav": "wav", "audio/l16": "pcm",
+    "audio/mulaw": "mulaw", "audio/alaw": "alaw",
 }
 
 PLAYABLE_MIMES = {
     "audio/wav": ("wav", "audio/wav"),
-    "audio/mp3": ("mp3", "audio/mpeg"),
-    "audio/ogg_opus": ("opus", "audio/ogg"),
 }
 
 RAW_PCM_MIMES = {"audio/l16", "audio/mulaw", "audio/alaw"}
@@ -324,7 +294,7 @@ st.set_page_config(page_title="Gemini TTS Studio Pro", page_icon="🎙️",
                    layout="wide", initial_sidebar_state="expanded")
 st.markdown(RTL_CSS, unsafe_allow_html=True)
 st.title("🎙️ Gemini TTS Studio Pro")
-st.caption("نسخه نهایی — Gemini 3.8 Flash TTS با فیلتر داینامیک فرمت خروجی")
+st.caption("نسخه نهایی — Gemini 3.8 Flash TTS با قالب‌بندی خودکار چندبلندگو")
 
 
 # ============================================================
@@ -368,11 +338,12 @@ with st.sidebar:
         "`warm and enthusiastic`"
     )
 
-    st.subheader("🎚️ فرمت‌های خروجی")
+    st.subheader("🤖 مدل‌ها")
     st.info(
-        "**مدل‌های ۳.x:** WAV، L16، mu-law، A-law\n"
-        "**مدل ۲.۵:** WAV، L16، MP3، Ogg Opus، mu-law، A-law\n\n"
-        "MP3 و Ogg Opus فقط در مدل‌های ۲.۵ در دسترس هستند."
+        "**فقط مدل‌های ۳.۸** پشتیبانی می‌شوند:\n\n"
+        "- `gemini-3.8-flash-tts` (کیفیت بالا)\n"
+        "- `gemini-3.8-flash-lite-tts` (سریع)\n\n"
+        "مدل‌های ۲.۵ و ۳.۱ از `speech_metadata` پشتیبانی نمی‌کنند."
     )
 
     st.subheader("⚠️ محدودیت‌ها")
@@ -430,18 +401,16 @@ with c3:
         help="تکه‌های PCM خام را برمی‌گرداند."
     )
 
-# 🎯 انتخاب فرمت خروجی بر اساس مدل انتخابی (فیلتر داینامیک)
 with c4:
-    supported_mimes = MODEL_MIME_SUPPORT.get(tts_model, MODEL_MIME_SUPPORT["gemini-3.8-flash-tts"])
     mime_label = st.selectbox(
         "🎚️ فرمت خروجی:",
-        list(supported_mimes.keys()),
+        list(MIME_TYPES.keys()),
         index=0,
         disabled=stream_enabled,
-        help=f"فرمت‌های موجود برای مدل {tts_model}",
+        help="در حالت استریمینگ، خروجی همیشه PCM خام است.",
     )
 
-mime_type = supported_mimes[mime_label]
+mime_type = MIME_TYPES[mime_label]
 
 
 # ============================================================
@@ -568,11 +537,7 @@ else:
             st.markdown("**🛠️ تنظیمات سفارشی**")
             custom_sub = st.radio(
                 "روش سفارشی:",
-                [
-                    "🔗 جداکننده سفارشی",
-                    "🏷️ نگاشت نام‌ها",
-                    "🔢 تعداد خط در هر نوبت",
-                ],
+                ["🔗 جداکننده سفارشی", "🏷️ نگاشت نام‌ها", "🔢 تعداد خط در هر نوبت"],
                 key="custom_sub_radio",
             )
             if "جداکننده" in custom_sub:
@@ -580,7 +545,11 @@ else:
                 custom_sep = st.text_input("🎯 جداکننده:", value="---", key="custom_sep_input")
             elif "نگاشت" in custom_sub:
                 custom_mode = "mapping"
-                custom_map = st.text_input("🏷️ نگاشت (نام=شماره):", value=f"{speaker1}=1, {speaker2}=2", key="custom_map_input")
+                custom_map = st.text_input(
+                    "🏷️ نگاشت (نام=شماره):",
+                    value=f"{speaker1}=1, {speaker2}=2",
+                    key="custom_map_input",
+                )
             else:
                 custom_mode = "n_lines"
                 custom_n = st.number_input("🔢 تعداد خط در هر نوبت:", min_value=1, max_value=20, value=2, key="custom_n_input")
@@ -588,19 +557,27 @@ else:
         if raw_text.strip():
             if strategy_label == STRATEGY_OPTIONS[4]:
                 if custom_mode:
-                    preview = custom_format_multispeaker(raw_text, custom_mode, speaker1, speaker2,
-                                                          separator=custom_sep, custom_map=custom_map, lines_per_turn=custom_n)
+                    preview = custom_format_multispeaker(
+                        raw_text, custom_mode, speaker1, speaker2,
+                        separator=custom_sep, custom_map=custom_map, lines_per_turn=custom_n,
+                    )
                     st.info("🛠️ استراتژی: **سفارشی**")
                 else:
                     preview = ""
                     st.warning("لطفاً تنظیمات سفارشی را تکمیل کنید.")
             elif auto_detect:
                 final_strategy = detect_best_strategy(raw_text)
-                strategy_names = {"couplet": "بیت به بیت", "line": "خط به خط", "stanza": "بند به بند", "dash": "تشخیص با خط تیره"}
+                strategy_names = {
+                    "couplet": "بیت به بیت", "line": "خط به خط",
+                    "stanza": "بند به بند", "dash": "تشخیص با خط تیره",
+                }
                 preview = auto_format_multispeaker(raw_text, final_strategy, speaker1, speaker2)
                 st.info(f"🔍 استراتژی تشخیص‌داده‌شده: **{strategy_names[final_strategy]}**")
             else:
-                strategy_map = {STRATEGY_OPTIONS[0]: "couplet", STRATEGY_OPTIONS[1]: "line", STRATEGY_OPTIONS[2]: "stanza", STRATEGY_OPTIONS[3]: "dash"}
+                strategy_map = {
+                    STRATEGY_OPTIONS[0]: "couplet", STRATEGY_OPTIONS[1]: "line",
+                    STRATEGY_OPTIONS[2]: "stanza", STRATEGY_OPTIONS[3]: "dash",
+                }
                 preview = auto_format_multispeaker(raw_text, strategy_map[strategy_label], speaker1, speaker2)
 
             if preview:
@@ -774,7 +751,9 @@ if st.button("🎧 تولید صدا", type="primary", use_container_width=True,
             st.error("تنظیمات غیرمجاز. پارامترها را بررسی کنید.")
         elif "mime_type" in err:
             st.error("فرمت خروجی نامعتبر است.")
-            st.info("لطفاً از لیست فرمت‌های پشتیبانی‌شده برای مدل انتخابی استفاده کنید.")
+        elif "speech_metadata" in err or "annotations" in err:
+            st.error("مدل انتخابی از speech_metadata پشتیبانی نمی‌کند.")
+            st.info("لطفاً از مدل‌های `gemini-3.8-flash-tts` یا `gemini-3.8-flash-lite-tts` استفاده کنید.")
         elif "quota" in err.lower():
             st.error("سهمیه API تمام شده است.")
         else:
