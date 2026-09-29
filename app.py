@@ -33,7 +33,7 @@ textarea, .stTextArea textarea {
 # ============================================================
 
 def save_wave(filename, pcm, channels=1, rate=24000, sample_width=2):
-    """ذخیره فایل WAV از PCM خام."""
+    """ذخیره فایل WAV از PCM خام (برای فرمت‌های L16/mulaw/alaw)."""
     with wave.open(filename, "wb") as wf:
         wf.setnchannels(channels)
         wf.setsampwidth(sample_width)
@@ -119,10 +119,8 @@ def clean_text(text):
     """حذف نشانه‌های Markdown و کاراکترهای اضافی از هر خط."""
     cleaned = []
     for ln in text.splitlines():
-        # حذف * و _ در ابتدا و انتها (Markdown italic/bold)
         s = re.sub(r"^[\*\_\s]+", "", ln)
         s = re.sub(r"[\*\_\s]+$", "", s)
-        # حذف بک‌تیک و نقل‌قول‌های اضافی
         s = s.strip("`\"'«»").strip()
         cleaned.append(s)
     return "\n".join(cleaned)
@@ -138,7 +136,6 @@ def normalize_colons(text):
 # ============================================================
 
 def _clean_lines(raw_text):
-    """بازگرداندن لیست خطوط غیر خالی و تمیز."""
     text = clean_text(normalize_colons(raw_text))
     return [ln.strip() for ln in text.splitlines() if ln.strip()]
 
@@ -192,14 +189,7 @@ def custom_format_multispeaker(
     raw_text, custom_mode, spk1, spk2,
     separator="", custom_map="", lines_per_turn=2,
 ):
-    """
-    قالب‌بندی سفارشی.
-    
-    custom_mode:
-    - "separator": تقسیم بر اساس جداکننده، متناوب بین گوینده‌ها
-    - "mapping":   نگاشت نام‌های دلخواه به گوینده‌ها
-    - "n_lines":   هر N خط به یک گوینده
-    """
+    """قالب‌بندی سفارشی در سه حالت."""
     if custom_mode == "separator":
         if not separator.strip():
             return ""
@@ -212,7 +202,6 @@ def custom_format_multispeaker(
         return "\n".join(result)
 
     elif custom_mode == "mapping":
-        # custom_map: "مرد=1, زن=2"  (1=گوینده اول، 2=گوینده دوم)
         map_dict = {}
         for pair in custom_map.split(","):
             if "=" in pair:
@@ -232,7 +221,6 @@ def custom_format_multispeaker(
                     spk = spk1 if target == "1" else spk2
                     result.append(f"{spk}: {txt}")
                 else:
-                    # پیشوند ناشناخته - خط را کامل با گوینده پیش‌فرض
                     result.append(f"{spk1}: {ln.strip()}")
             else:
                 result.append(f"{spk1}: {ln.strip()}")
@@ -252,7 +240,6 @@ def custom_format_multispeaker(
 
 
 def detect_best_strategy(raw_text):
-    """تشخیص خودکار بهترین استراتژی."""
     lines = _clean_lines(raw_text)
     if not lines:
         return "line"
@@ -260,19 +247,12 @@ def detect_best_strategy(raw_text):
     avg_len = sum(len(ln) for ln in lines) / len(lines)
     dash_count = sum(1 for ln in lines if ln.startswith(("-", "—", "–")))
 
-    # نمایش‌نامه
     if dash_count >= len(lines) * 0.5 and len(lines) >= 4:
         return "dash"
-
-    # بند به بند (خط خالی زیاد)
     if raw_text.count("\n\n") >= 2:
         return "stanza"
-
-    # شعر (خطوط کوتاه، تعداد زیاد)
     if avg_len < 70 and len(lines) >= 4:
         return "couplet"
-
-    # تک‌گویی بلند
     return "line"
 
 
@@ -282,32 +262,24 @@ def detect_best_strategy(raw_text):
 
 def parse_speaker_line(line, spk1, spk2):
     """
-    تجزیه‌ی یک خط به (نام گوینده، متن).
-    
-    نکته کلیدی: نام گوینده فقط برای هدایت مدل در annotations استفاده 
-    می‌شود و در فیلد text ارسال نمی‌شود، پس هرگز خوانده نمی‌شود.
+    تجزیه‌ی خط به (نام گوینده، متن).
+    نام گوینده فقط برای annotations استفاده می‌شود و در text ارسال نمی‌شود.
     """
     line = line.strip()
     if not line:
         return None, None
 
-    # نرمال‌سازی کولون
     normalized = line.replace("：", ":").replace("﹕", ":")
 
     if ":" in normalized:
         prefix, txt = normalized.split(":", 1)
         prefix, txt = prefix.strip(), txt.strip()
 
-        # اگر پیشوند کوتاه است و شبیه نام گوینده است
         if len(prefix) < 40 and (prefix == spk1 or prefix == spk2):
             return prefix, txt
-        # اگر پیشوند گوینده‌ی شناخته‌شده ولی نه دقیقاً نام‌های انتخابی
-        # (مثلاً وقتی کاربر نام گوینده را عوض کرده ولی متن قدیمی است)
         elif len(prefix) < 40 and not any(c in prefix for c in "!؟?.,،"):
-            # پیشوند = نام گوینده، احتمالاً نام‌های قدیمی
             return spk1, txt
 
-    # خط بدون پیشوند → گوینده اول
     return spk1, line
 
 
@@ -343,12 +315,35 @@ MODELS = [
     "gemini-2.5-pro-preview-tts",
 ]
 
+# ✅ MIME types صحیح (حروف کوچک) طبق پیام خطای API
 MIME_TYPES = {
     "WAV (پیش‌فرض)": "audio/wav",
-    "PCM خطی L16": "audio/L16",
+    "PCM خطی L16": "audio/l16",
+    "MP3 (فشرده)": "audio/mp3",
+    "Ogg Opus": "audio/ogg_opus",
     "mu-law (تلفن آمریکا)": "audio/mulaw",
     "A-law (تلفن اروپا)": "audio/alaw",
 }
+
+# پسوند فایل‌ها
+EXT_MAP = {
+    "audio/wav": "wav",
+    "audio/l16": "pcm",
+    "audio/mp3": "mp3",
+    "audio/ogg_opus": "opus",
+    "audio/mulaw": "mulaw",
+    "audio/alaw": "alaw",
+}
+
+# فرمت‌هایی که Streamlit مستقیماً پخش می‌کند
+PLAYABLE_MIMES = {
+    "audio/wav": ("wav", "audio/wav"),
+    "audio/mp3": ("mp3", "audio/mpeg"),
+    "audio/ogg_opus": ("opus", "audio/ogg"),
+}
+
+# فرمت‌های PCM خام که نیاز به هدر WAV دارند
+RAW_PCM_MIMES = {"audio/l16", "audio/mulaw", "audio/alaw"}
 
 
 # ============================================================
@@ -367,47 +362,13 @@ st.markdown(RTL_CSS, unsafe_allow_html=True)
 st.title("🎙️ Gemini TTS Studio Pro")
 st.caption(
     "نسخه نهایی — Gemini 3.8 Flash TTS با قالب‌بندی خودکار و سفارشی چندبلندگو، "
-    "برچسب‌های صوتی، استریمینگ و ۳۰ صدای استودیویی"
+    "پشتیبانی از ۶ فرمت خروجی و ۳۰ صدای استودیویی"
 )
 
 
 # ============================================================
 # 📚 سایدبار
 # ============================================================
-
-SIDEBAR_TAGS = (
-    "**برچسب‌های صوتی درون‌خطی** (براکت زاویه‌ای):\n\n"
-    "`<laugh>` | `<sigh>` | `<cough>` | `<breath>`\n"
-    "`<gasp>` | `<giggle>` | `<chuckle>` | `<cry>`\n"
-    "`<whispers>` | `<shout>` | `<yawn>` | `<snort>`\n"
-    "`<short pause>` | `<long pause>`\n\n"
-    "مثال:\n"
-    "`سلام! <laugh> چطوری؟ <short pause> خوبم.`"
-)
-
-SIDEBAR_STYLE = (
-    "سبک را در فیلد **style** وارد کنید (نه در متن):\n\n"
-    "`cheerful and friendly`\n"
-    "`calm and relaxed`\n"
-    "`whispered urgently`\n"
-    "`out of breath`\n"
-    "`warm and enthusiastic`\n"
-    "`speaking slowly` | `speaking rapidly`"
-)
-
-SIDEBAR_LIMITS = (
-    "- حداکثر **۸,۱۹۲ توکن** ورودی\n"
-    "- حداکثر **۲ بلندگو**\n"
-    "- فقط ورودی متنی\n"
-    "- استریمینگ → PCM خام\n"
-    "- غیر استریم → WAV با هدر"
-)
-
-SIDEBAR_NOTE = (
-    "🔒 **نام گوینده‌ها هرگز خوانده نمی‌شود!**\n\n"
-    "نام‌ها فقط برای هدایت مدل در فیلد `annotations.speaker` "
-    "استفاده می‌شوند و در متن نهایی به API ارسال نمی‌شوند."
-)
 
 with st.sidebar:
     st.header("🎯 راهنما و تنظیمات")
@@ -422,16 +383,46 @@ with st.sidebar:
         st.warning("⚠️ پیکربندی نشده")
 
     st.subheader("🔒 نکته مهم")
-    st.success(SIDEBAR_NOTE)
+    st.success(
+        "**نام گوینده‌ها هرگز خوانده نمی‌شود!**\n\n"
+        "نام‌ها فقط برای هدایت مدل در `annotations.speaker` استفاده می‌شوند."
+    )
 
     st.subheader("🏷️ برچسب‌های صوتی")
-    st.info(SIDEBAR_TAGS)
+    st.info(
+        "**برچسب‌های درون‌خطی** (براکت زاویه‌ای):\n\n"
+        "`<laugh>` | `<sigh>` | `<cough>` | `<breath>`\n"
+        "`<gasp>` | `<giggle>` | `<chuckle>` | `<cry>`\n"
+        "`<whispers>` | `<shout>` | `<yawn>` | `<snort>`\n"
+        "`<short pause>` | `<long pause>`\n\n"
+        "مثال:\n"
+        "`سلام! <laugh> چطوری؟ <short pause> خوبم.`"
+    )
 
     st.subheader("🎭 کنترل سبک")
-    st.info(SIDEBAR_STYLE)
+    st.info(
+        "سبک را در فیلد **style** وارد کنید:\n\n"
+        "`cheerful and friendly`\n"
+        "`calm and relaxed`\n"
+        "`whispered urgently`\n"
+        "`out of breath`\n"
+        "`warm and enthusiastic`\n"
+        "`speaking slowly` | `speaking rapidly`"
+    )
+
+    st.subheader("🎚️ فرمت‌های خروجی")
+    st.info(
+        "**پخش‌شدنی:** WAV، MP3، Ogg Opus\n\n"
+        "**PCM خام (تبدیل به WAV):** L16، mu-law، A-law"
+    )
 
     st.subheader("⚠️ محدودیت‌ها")
-    st.warning(SIDEBAR_LIMITS)
+    st.warning(
+        "- حداکثر **۸,۱۹۲ توکن** ورودی\n"
+        "- حداکثر **۲ بلندگو**\n"
+        "- فقط ورودی متنی\n"
+        "- استریمینگ → PCM خام"
+    )
 
 
 # ============================================================
@@ -451,8 +442,7 @@ if not api_key:
         "### 🔧 تنظیم تلگرام (اختیاری)\n"
         "در Streamlit Cloud → Settings → Secrets این دو مقدار را وارد کنید:\n\n"
         "**TELEGRAM_BOT_TOKEN** = توکن ربات\n\n"
-        "**TELEGRAM_CHAT_ID** = چت آیدی\n\n"
-        "ربات را از @BotFather بسازید و Chat ID را از @userinfobot بگیرید."
+        "**TELEGRAM_CHAT_ID** = چت آیدی"
     )
     st.stop()
 
@@ -481,7 +471,7 @@ with c3:
     stream_enabled = st.checkbox(
         "🎧 استریمینگ",
         value=False,
-        help="تکه‌های PCM خام را بدون هدر برمی‌گرداند.",
+        help="تکه‌های PCM خام را برمی‌گرداند. برای متن‌های طولانی مناسب.",
     )
 
 with c4:
@@ -490,12 +480,10 @@ with c4:
         list(MIME_TYPES.keys()),
         index=0,
         disabled=stream_enabled,
+        help="در حالت استریمینگ، خروجی همیشه PCM خام (L16) است.",
     )
 
 mime_type = MIME_TYPES[mime_label]
-ext_map = {"audio/wav": "wav", "audio/L16": "pcm",
-           "audio/mulaw": "mulaw", "audio/alaw": "alaw"}
-file_ext = ext_map.get(mime_type, "wav")
 
 
 # ============================================================
@@ -610,7 +598,7 @@ else:
             "سبک گوینده ۲:", placeholder="warm and gentle", key="s2"
         )
 
-    # گام ۲: قالب‌بندی خودکار (Expander)
+    # گام ۲: قالب‌بندی خودکار
     with st.expander(
         "🤖 قالب‌بندی خودکار متن (پیشنهاد ویژه برای شعر و دیالوگ)",
         expanded=False,
@@ -660,7 +648,6 @@ else:
                 help="بهترین استراتژی بر اساس ساختار متن.",
             )
 
-        # -- تنظیمات استراتژی سفارشی --
         custom_mode = None
         custom_sep = ""
         custom_map = ""
@@ -668,7 +655,6 @@ else:
 
         if strategy_label == STRATEGY_OPTIONS[4]:
             st.markdown("**🛠️ تنظیمات سفارشی**")
-
             custom_sub = st.radio(
                 "روش سفارشی:",
                 [
@@ -676,7 +662,6 @@ else:
                     "🏷️ نگاشت نام‌ها (هر جا «مرد:» بود → گوینده ۱)",
                     "🔢 تعداد خط در هر نوبت",
                 ],
-                horizontal=False,
                 key="custom_sub_radio",
             )
 
@@ -686,7 +671,7 @@ else:
                     "🎯 جداکننده:",
                     value="---",
                     key="custom_sep_input",
-                    help="مثال: --- یا *** یا ===  . بین بخش‌ها گوینده عوض می‌شود.",
+                    help="مثال: --- یا *** یا ===  بین بخش‌ها گوینده عوض می‌شود.",
                 )
             elif "نگاشت" in custom_sub:
                 custom_mode = "mapping"
@@ -694,26 +679,19 @@ else:
                     "🏷️ نگاشت (نام=شماره):",
                     value=f"{speaker1}=1, {speaker2}=2",
                     key="custom_map_input",
-                    help=(
-                        "مثال: مرد=1, زن=2, راوی=1\n"
-                        "یعنی هر جا «مرد:» بود → گوینده اول، «زن:» → گوینده دوم"
-                    ),
+                    help="مثال: مرد=1, زن=2, راوی=1",
                 )
             else:
                 custom_mode = "n_lines"
                 custom_n = st.number_input(
                     "🔢 تعداد خط در هر نوبت:",
-                    min_value=1,
-                    max_value=20,
-                    value=2,
+                    min_value=1, max_value=20, value=2,
                     key="custom_n_input",
                 )
 
         # -- پردازش --
         if raw_text.strip():
-            # تعیین استراتژی نهایی
             if strategy_label == STRATEGY_OPTIONS[4]:
-                # سفارشی
                 if custom_mode:
                     preview = custom_format_multispeaker(
                         raw_text, custom_mode, speaker1, speaker2,
@@ -726,7 +704,6 @@ else:
                     preview = ""
                     st.warning("لطفاً تنظیمات سفارشی را تکمیل کنید.")
             elif auto_detect:
-                # تشخیص خودکار
                 final_strategy = detect_best_strategy(raw_text)
                 strategy_names = {
                     "couplet": "بیت به بیت",
@@ -791,13 +768,9 @@ else:
         value=default_text,
         height=280,
         key="multispeaker_final_text",
-        help=(
-            f"هر خط را با «نام گوینده:» شروع کنید. "
-            f"نام‌ها فقط برای هدایت مدل استفاده می‌شوند و خوانده نمی‌شوند."
-        ),
+        help="هر خط را با «نام گوینده:» شروع کنید. نام‌ها خوانده نمی‌شوند.",
     )
 
-    # دکمه پاک‌سازی
     cc1, cc2 = st.columns([1, 3])
     with cc1:
         if st.session_state.get("auto_formatted_text"):
@@ -860,8 +833,7 @@ if st.button(
                 speech_config = [{"voice": selected_voice}]
 
             else:
-                # چندبلندگو: هر خط → یک بلوک با speaker در annotations
-                # 🎯 نام گوینده در فیلد text ارسال نمی‌شود
+                # چندبلندگو: نام گوینده در text ارسال نمی‌شود
                 lines = [ln.strip() for ln in text_input.splitlines() if ln.strip()]
                 content_blocks = []
 
@@ -870,7 +842,6 @@ if st.button(
                     if not txt:
                         continue
 
-                    # اگر parse نتوانست گوینده را تشخیص دهد
                     if spk not in (speaker1, speaker2):
                         spk = speaker1
 
@@ -895,7 +866,11 @@ if st.button(
                 }
 
             # ---------- فراخوانی API ----------
+            file_name = ""
+            play_format = "audio/wav"
+
             if stream_enabled:
+                # استریمینگ: خروجی PCM خام
                 stream = client.interactions.create(
                     model=tts_model,
                     input=input_blocks,
@@ -913,7 +888,10 @@ if st.button(
                 pcm_data = b"".join(audio_chunks)
                 file_name = "output.wav"
                 save_wave(file_name, pcm_data)
+                play_format = "audio/wav"
+
             else:
+                # غیر استریم
                 interaction = client.interactions.create(
                     model=tts_model,
                     input=input_blocks,
@@ -922,31 +900,43 @@ if st.button(
                 )
                 audio_bytes = base64.b64decode(interaction.output_audio.data)
 
-                if mime_type == "audio/wav":
-                    file_name = "output.wav"
+                if mime_type in PLAYABLE_MIMES:
+                    # WAV، MP3، Ogg Opus → مستقیماً ذخیره
+                    ext, play_format = PLAYABLE_MIMES[mime_type]
+                    file_name = f"output.{ext}"
                     with open(file_name, "wb") as f:
                         f.write(audio_bytes)
-                else:
-                    file_name = f"output.{file_ext}"
+
+                elif mime_type in RAW_PCM_MIMES:
+                    # L16 / mulaw / alaw → بسته‌بندی به WAV برای پخش
+                    file_name = f"output.{EXT_MAP.get(mime_type, 'pcm')}"
                     with open(file_name, "wb") as f:
                         f.write(audio_bytes)
+                    # یک کپی WAV برای پخش در Streamlit
                     playable = "output.wav"
                     save_wave(playable, audio_bytes)
                     file_name = playable
+                    play_format = "audio/wav"
+
+                else:
+                    # پیش‌فرض
+                    file_name = "output.wav"
+                    save_wave(file_name, audio_bytes)
+                    play_format = "audio/wav"
 
             # ---------- نمایش ----------
             st.success("✅ تولید صدا با موفقیت انجام شد!")
 
             col_a, col_b = st.columns([2, 1])
             with col_a:
-                st.audio(file_name, format="audio/wav")
+                st.audio(file_name, format=play_format)
             with col_b:
                 with open(file_name, "rb") as f:
                     st.download_button(
                         "⬇️ دانلود فایل صوتی",
                         data=f,
                         file_name=file_name,
-                        mime="audio/wav",
+                        mime=play_format,
                         use_container_width=True,
                     )
 
@@ -957,6 +947,7 @@ if st.button(
                         f"Gemini TTS\n"
                         f"مدل: {tts_model}\n"
                         f"حالت: {mode}\n"
+                        f"فرمت: {mime_label}\n"
                         f"کاراکتر: {len(text_input)}"
                     )
                     send_to_telegram(file_name, cap)
@@ -991,6 +982,8 @@ if st.button(
             st.error(f"مدل `{tts_model}` در دسترس نیست.")
         elif "extra_forbidden" in err:
             st.error("تنظیمات غیرمجاز. پارامترها را بررسی کنید.")
+        elif "mime_type" in err:
+            st.error("فرمت خروجی نامعتبر است. یکی از فرمت‌های مجاز را انتخاب کنید.")
         elif "quota" in err.lower():
             st.error("سهمیه API تمام شده است.")
         else:
