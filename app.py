@@ -9,7 +9,7 @@ import requests
 import streamlit as st
 from google import genai
 
-# Gemini 3.8 TTS Studio Pro — نسخه پایدار (اصلاح باگ تولید متن و آیکون‌ها)
+# Gemini 3.8 TTS Studio Pro — نسخه پایدار (قابلیت انتخاب زبان فارسی/بلوچی/خودکار)
 # Requires: streamlit, google-genai>=2.25.0, requests
 
 st.set_page_config(page_title="Gemini TTS Studio Pro", page_icon="🎙️", layout="wide")
@@ -21,12 +21,10 @@ RTL_CSS = """
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Material+Symbols+Rounded:opsz,wght,FILL,GRAD@20..48,100..700,0..1,-50..200');
 
-/* اعمال فونت فارسی فقط روی متن‌ها (نه کلاس‌های st- که آیکون‌ها را خراب می‌کند) */
 html, body, p, h1, h2, h3, h4, h5, h6, label, .stMarkdown, .stText {
     font-family: 'Vazirmatn', 'Tahoma', sans-serif;
 }
 
-/* استثنا کردن فونت آیکون‌های Streamlit */
 .material-symbols-rounded,
 .material-icons,
 [data-testid="stIconMaterial"],
@@ -36,14 +34,12 @@ span[class*="material-symbols"] {
     font-feature-settings: 'liga' !important;
 }
 
-/* راست‌چین کردن کادرهای متن */
 textarea, .stTextArea textarea, .stTextInput input {
     direction: rtl;
     text-align: right;
     font-family: 'Vazirmatn', 'Tahoma', sans-serif;
 }
 
-/* راست‌چین کردن بلوک‌های کد */
 .stCodeBlock pre, .stCode pre {
     direction: rtl;
     text-align: right;
@@ -60,7 +56,7 @@ st.caption("نسخه پایدار · تولید صدا، گفت‌وگوی دو�
 # ----------------------------- Constants -----------------------------
 
 SAMPLE_RATES = [24000, 16000, 8000]
-STREAM_SAMPLE_RATE = 24000      # استریم طبق مستندات همیشه L16/24kHz است
+STREAM_SAMPLE_RATE = 24000
 HISTORY_LIMIT = 10
 RETRY_ATTEMPTS = 3
 RETRY_BASE_DELAY = 1.5
@@ -303,7 +299,6 @@ def is_retriable(exc):
 
 
 def create_with_retry(client, **kwargs):
-    """تلاش مجدد برای درخواست‌های TTS (interactions)"""
     last_exc = None
     for attempt in range(RETRY_ATTEMPTS):
         try:
@@ -317,7 +312,6 @@ def create_with_retry(client, **kwargs):
 
 
 def generate_text_with_retry(client, model, prompt):
-    """تلاش مجدد برای تولید متن با مدل‌های زبانی"""
     last_exc = None
     for attempt in range(RETRY_ATTEMPTS):
         try:
@@ -418,7 +412,6 @@ def load_single_sample():
         "سلام! به Gemini TTS Studio Pro خوش آمدید. <short pause> امیدوارم روز فوق‌العاده‌ای داشته باشید."
     )
 
-
 def load_multi_sample():
     spk1 = st.session_state.get("speaker_name_1", "مرد")
     spk2 = st.session_state.get("speaker_name_2", "زن")
@@ -428,7 +421,6 @@ def load_multi_sample():
         f"{spk1}: عالی‌ام! <laugh> آماده‌ای شروع کنیم؟\n"
         f"{spk2}: همیشه آماده‌ام!"
     )
-
 
 def load_poem_sample():
     spk1 = st.session_state.get("speaker_name_1", "مرد")
@@ -545,16 +537,33 @@ with st.expander("🪄 تولید خودکار متن/گفت‌وگو", expanded
     with g2:
         transcript_style = st.selectbox("سبک", ["پادکست", "مصاحبه", "گفت‌وگوی دوستانه", "بحث علمی", "داستان"])
     with g3:
-        word_count = st.slider("حدود کلمه", 50, 500, 150, step=25)
+        # منوی کشویی برای انتخاب زبان
+        language = st.selectbox("زبان تولید متن", ["فارسی", "بلوچی", "تشخیص خودکار"])
+        
+    word_count = st.slider("حدود کلمه", 50, 500, 150, step=25)
+    
     if st.button("تولید متن با Gemini", use_container_width=True):
         try:
             with st.spinner("در حال نوشتن متن..."):
+                spk1_name = st.session_state.get("speaker_name_1", "گوینده ۱")
+                spk2_name = st.session_state.get("speaker_name_2", "گوینده ۲")
+                
+                # منطق پرامپت بر اساس انتخاب کاربر
+                if language == "تشخیص خودکار":
+                    lang_instruction = (
+                        "زبان متن را به صورت خودکار تشخیص بده. اگر موضوع (Topic) به زبان بلوچی نوشته شده بود، "
+                        "متن را به بلوچی تولید کن؛ در غیر این صورت متن را به فارسی روان تولید کن."
+                    )
+                else:
+                    lang_instruction = f"متن باید دقیقاً به زبان {language} باشد."
+
                 prompt = (
-                    f"یک متن گفت‌وگوی حدود {word_count} کلمه‌ای به فارسی، سبک {transcript_style}، "
-                    f"دربارهٔ «{topic}» بنویس. فقط خطوط گفت‌وگو را با قالب دقیق «گوینده ۱: متن» و "
-                    "«گوینده ۲: متن» برگردان؛ توضیح اضافی ننویس."
+                    f"یک متن گفت‌وگوی حدود {word_count} کلمه‌ای بنویس. {lang_instruction} "
+                    f"سبک {transcript_style}، دربارهٔ «{topic}». "
+                    f"فقط خطوط گفت‌وگو را با قالب دقیق «{spk1_name}: متن» و "
+                    f"«{spk2_name}: متن» برگردان؛ توضیح اضافی ننویس."
                 )
-                # اصلاح باگ: استفاده از متد generate_content به جای interactions.create
+                
                 response = generate_text_with_retry(
                     client, model="gemini-2.5-flash", prompt=prompt
                 )
