@@ -9,21 +9,53 @@ import requests
 import streamlit as st
 from google import genai
 
-# Gemini 3.8 TTS Studio Pro — نسخه پایدار و اصلاح‌شده
+# Gemini 3.8 TTS Studio Pro — نسخه پایدار (اصلاح باگ آیکون‌ها)
 # Requires: streamlit, google-genai>=2.25.0, requests
 
 st.set_page_config(page_title="Gemini TTS Studio Pro", page_icon="🎙️", layout="wide")
 
+# ---------------------------------------------------------
+# اصلاح CSS: جلوگیری از خرابی آیکون‌ها و راست‌چین کردن متن
+# ---------------------------------------------------------
 RTL_CSS = """
 <style>
-html, body, [class*="st-"], textarea, input { font-family: 'Vazirmatn','Tahoma',sans-serif; }
-textarea, .stTextArea textarea, .stTextInput input { direction:rtl; text-align:right; }
-.stCodeBlock pre, .stCode pre { direction:rtl; text-align:right; font-size:14px; line-height:1.8; }
+@import url('https://fonts.googleapis.com/css2?family=Material+Symbols+Rounded:opsz,wght,FILL,GRAD@20..48,100..700,0..1,-50..200');
+
+/* اعمال فونت فارسی فقط روی متن‌ها (نه کلاس‌های st- که آیکون‌ها را خراب می‌کند) */
+html, body, p, h1, h2, h3, h4, h5, h6, label, .stMarkdown, .stText {
+    font-family: 'Vazirmatn', 'Tahoma', sans-serif;
+}
+
+/* استثنا کردن فونت آیکون‌های Streamlit */
+.material-symbols-rounded,
+.material-icons,
+[data-testid="stIconMaterial"],
+span[class*="material-symbols"] {
+    font-family: 'Material Symbols Rounded' !important;
+    direction: ltr !important;
+    font-feature-settings: 'liga' !important;
+}
+
+/* راست‌چین کردن کادرهای متن */
+textarea, .stTextArea textarea, .stTextInput input {
+    direction: rtl;
+    text-align: right;
+    font-family: 'Vazirmatn', 'Tahoma', sans-serif;
+}
+
+/* راست‌چین کردن بلوک‌های کد */
+.stCodeBlock pre, .stCode pre {
+    direction: rtl;
+    text-align: right;
+    font-size: 14px;
+    line-height: 1.8;
+}
 </style>
 """
 st.markdown(RTL_CSS, unsafe_allow_html=True)
+
 st.title("🎙️ Gemini TTS Studio Pro")
-st.caption("نسخه پایدار و اصلاح‌شده · نمونه‌سازی، چندگوینده، استریمینگ، تاریخچه و تلگرام")
+st.caption("نسخه پایدار · تولید صدا، گفت‌وگوی دوگوینده، استریمینگ، تاریخچه و تلگرام")
 
 # ----------------------------- Constants -----------------------------
 
@@ -208,7 +240,6 @@ def format_multispeaker(raw, strategy, spk1, spk2, separator="---", mapping="", 
 
 
 def split_text_safely(text, max_chars=3500):
-    """تقسیم متن در مرزهای جمله/پاراگراف؛ محتوا حفظ می‌شود."""
     text = text.strip()
     if len(text) <= max_chars:
         return [text]
@@ -239,7 +270,6 @@ def split_text_safely(text, max_chars=3500):
 
 
 def split_multispeaker_lines(text, max_chars=3500):
-    """چانک‌بندی فقط در مرز خطوط تا برچسب گوینده از دست نرود."""
     lines = [line for line in text.splitlines() if line.strip()]
     chunks, current = [], ""
     for line in lines:
@@ -273,7 +303,6 @@ def is_retriable(exc):
 
 
 def create_with_retry(client, **kwargs):
-    """تلاش مجدد فقط برای درخواست‌های unary (استریم قابل بازگشت نیست)."""
     last_exc = None
     for attempt in range(RETRY_ATTEMPTS):
         try:
@@ -317,11 +346,9 @@ def build_multi_input(text, spk1, spk2, voice1, voice2, style1, style2):
 # ----------------------------- TTS Engine -----------------------------
 
 def generate_audio(client, model, input_blocks, speech_config, stream, mime_type, sample_rate):
-    """تولید صدا و بازگرداندن (wav_bytes, ext, elapsed, raw_bytes_len)."""
     started = time.time()
 
     if stream:
-        # استریم طبق مستندات همیشه L16/24kHz/mono است؛ sample_rate در استریم اعمال نمی‌شود.
         response = client.interactions.create(
             model=model, input=input_blocks,
             response_format={"type": "audio"},
@@ -343,7 +370,6 @@ def generate_audio(client, model, input_blocks, speech_config, stream, mime_type
         return pcm_to_wav_bytes(raw, rate=STREAM_SAMPLE_RATE), "wav", time.time() - started, len(raw)
 
     response_format = {"type": "audio", "mime_type": mime_type}
-    # sample_rate برای همهٔ فرمت‌های unary پشتیبانی می‌شود (مطابق مستندات)
     if sample_rate:
         response_format["sample_rate"] = int(sample_rate)
 
@@ -355,7 +381,7 @@ def generate_audio(client, model, input_blocks, speech_config, stream, mime_type
     )
     raw = decode_b64(getattr(getattr(response, "output_audio", None), "data", None))
     if not raw:
-        raise RuntimeError("API پاسخی بدون داده صوتی برگرداند. مدل/کلید/سهمیه را بررسی کنید.")
+        raise RuntimeError("API پاسخی بدون داده صوتی برگرداند.")
 
     if mime_type == "audio/wav":
         return raw, "wav", time.time() - started, len(raw)
