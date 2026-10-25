@@ -12,7 +12,7 @@ from google import genai
 # Gemini 3.8 TTS Studio Pro — upgraded edition
 # Requires: streamlit, google-genai>=2.25.0, requests
 
-st.set_page_config(page_title="Gemini TTS Studio Pro", page_icon="🎙️", layout="wide")
+st.set_page_config(page_title="Gemini TTS Studio Pro", page_icon="", layout="wide")
 
 RTL_CSS = """
 <style>
@@ -22,7 +22,7 @@ textarea, .stTextArea textarea, .stTextInput input { direction:rtl; text-align:r
 </style>
 """
 st.markdown(RTL_CSS, unsafe_allow_html=True)
-st.title("🎙️ Gemini TTS Studio Pro")
+st.title(" Gemini TTS Studio Pro")
 st.caption("نسخه ارتقایافته · تولید صدا، گفت‌وگوی دوگوینده، استریمینگ، تاریخچه و تلگرام")
 
 ALL_VOICES = [
@@ -366,7 +366,7 @@ def generate_audio(client, model, input_blocks, speech_config, stream, mime_type
 
 # Sidebar settings
 with st.sidebar:
-    st.header("⚙️ تنظیمات و راهنما")
+    st.header(" تنظیمات و راهنما")
     st.markdown("**مدل‌ها**\n- `gemini-3.8-flash-tts`\n- `gemini-3.8-flash-lite-tts`")
     st.info("خروجی استریم به‌صورت PCM خام دریافت و در پایان به WAV تبدیل می‌شود.")
     st.markdown("**برچسب‌های درون متن**\n`<short pause>` · `<long pause>` · `<laugh>` · `<sigh>` · `<breath>` · `<whisper>`")
@@ -378,7 +378,7 @@ with st.sidebar:
 
 # API key: Secrets preferred, UI fallback
 secret_api_key = get_secret("GEMINI_API_KEY")
-with st.expander("🔑 دسترسی API", expanded=not bool(secret_api_key)):
+with st.expander(" دسترسی API", expanded=not bool(secret_api_key)):
     if secret_api_key:
         st.success("کلید Gemini از Secrets خوانده می‌شود.")
         api_key = secret_api_key
@@ -400,7 +400,7 @@ if "history" not in st.session_state: st.session_state.history = []
 if "single_text_value" not in st.session_state: st.session_state.single_text_value = ""
 if "multi_text_value" not in st.session_state: st.session_state.multi_text_value = ""
 
-st.header("⚙️ تنظیمات تولید")
+st.header(" تنظیمات تولید")
 c1, c2, c3 = st.columns(3)
 with c1:
     mode = st.radio("حالت تولید", ["تک‌بلندگو", "چندبلندگو"], horizontal=True)
@@ -412,7 +412,7 @@ mime_label = st.selectbox("فرمت درخواستی API", list(MIME_TYPES), dis
 mime_type = MIME_TYPES[mime_label]
 
 # Optional transcript generator
-with st.expander("🪄 تولید خودکار متن/گفت‌وگو", expanded=False):
+with st.expander(" تولید خودکار متن/گفت‌وگو", expanded=False):
     g1, g2, g3 = st.columns(3)
     with g1: topic = st.text_input("موضوع", "تکنولوژی و هوش مصنوعی")
     with g2: transcript_style = st.selectbox("سبک", ["پادکست", "مصاحبه", "گفت‌وگوی دوستانه", "بحث علمی", "داستان"])
@@ -455,7 +455,7 @@ else:
         style2 = st.text_input("سبک گوینده ۲", placeholder="warm and gentle", key="style_2")
     if not speaker1.strip() or not speaker2.strip() or speaker1.strip() == speaker2.strip():
         st.warning("نام دو گوینده باید غیرخالی و متفاوت باشد.")
-    with st.expander("🧩 قالب‌بندی خودکار شعر و دیالوگ", expanded=False):
+    with st.expander(" قالب‌بندی خودکار شعر و دیالوگ", expanded=False):
         raw = st.text_area("متن خام", height=150, key="raw_multi", placeholder="هر خط یک جمله یا مصراع؛ می‌توانید بندها را با خط خالی جدا کنید.")
         strategy_label = st.selectbox("روش تقسیم", ["تشخیص خودکار", "خط به خط", "بیت به بیت (هر دو خط)", "بند به بند", "خط تیره", "تعداد خط در هر نوبت", "نگاشت نام گوینده", "جداکننده سفارشی"])
         sep, mapping, n_lines = "---", f"{speaker1}=1, {speaker2}=2", 2
@@ -474,7 +474,7 @@ else:
     text_input = st.text_area("متن نهایی چندگوینده", key="multi_text_value", height=280, placeholder=f"{speaker1}: سلام\n{speaker2}: سلام، حالت چطور است؟")
 
 # Ready-made samples that populate the actual input field
-st.subheader("🎭 نمونه‌های آماده")
+st.subheader(" نمونه‌های آماده")
 s1, s2, s3 = st.columns(3)
 with s1:
     if st.button("نمونه تک‌گوینده", use_container_width=True, on_click=load_single_sample):
@@ -487,7 +487,7 @@ with s3:
         pass
 
 # Validation / chunking options
-with st.expander("📏 کنترل متن و تقسیم متن طولانی", expanded=False):
+with st.expander(" کنترل متن و تقسیم متن طولانی", expanded=False):
     chunk_long_text = st.checkbox("اگر متن طولانی بود، آن را به چند درخواست تقسیم کن", value=False)
     chunk_size = st.slider("حد تقریبی کاراکتر در هر بخش", min_value=1000, max_value=6000, value=3500, step=250, disabled=not chunk_long_text)
     st.caption("تقسیم متن باعث چند درخواست API و مصرف سهمیه بیشتر می‌شود. برای چندگوینده، مرز خطوط حفظ می‌شود؛ با این حال پیوستگی لحن بین بخش‌ها تضمین‌شده نیست.")
@@ -501,7 +501,7 @@ elif len(text_input) > 18000 and not chunk_long_text:
 
 can_generate = bool(text_input.strip()) and (mode != "چندبلندگو" or (speaker1.strip() and speaker2.strip() and speaker1.strip() != speaker2.strip())) and (len(text_input) <= 18000 or chunk_long_text)
 
-if st.button("🎧 تولید صدا", type="primary", use_container_width=True, disabled=not can_generate):
+if st.button(" تولید صدا", type="primary", use_container_width=True, disabled=not can_generate):
     try:
         chunks = (split_multispeaker_lines(text_input, int(chunk_size)) if mode == "چندبلندگو" else split_text_safely(text_input, int(chunk_size))) if chunk_long_text else [text_input.strip()]
         all_wav = []
@@ -542,28 +542,28 @@ if st.button("🎧 تولید صدا", type="primary", use_container_width=True,
 
 # Output panel persists across reruns
 if st.session_state.get("last_audio"):
-    st.header("🔊 خروجی")
+    st.header(" خروجی")
     audio_bytes = st.session_state.last_audio
     filename = st.session_state.last_filename
     st.audio(audio_bytes, format="audio/wav")
-    st.download_button("⬇️ دانلود WAV", data=audio_bytes, file_name=filename, mime="audio/wav", use_container_width=True)
+    st.download_button("⬇ دانلود WAV", data=audio_bytes, file_name=filename, mime="audio/wav", use_container_width=True)
     meta = st.session_state.last_meta
     m1, m2, m3, m4 = st.columns(4)
     m1.metric("کاراکتر", f"{meta['characters']:,}")
     m2.metric("تعداد بخش", meta["chunks"])
     m3.metric("زمان تولید", f"{meta['seconds']:.1f} ثانیه")
     m4.metric("مدل", meta["model"])
-    if st.button("📤 ارسال خروجی به تلگرام", use_container_width=True):
+    if st.button(" ارسال خروجی به تلگرام", use_container_width=True):
         with st.spinner("در حال ارسال به تلگرام..."):
             caption = f"Gemini TTS\nمدل: {meta['model']}\nحالت: {meta['mode']}\nکاراکتر: {meta['characters']}"
             ok, message = send_to_telegram(audio_bytes, filename, caption)
         (st.success if ok else st.error)(message)
-    if st.button("🗂️ افزودن به تاریخچه نشست", use_container_width=True):
+    if st.button(" افزودن به تاریخچه نشست", use_container_width=True):
         st.session_state.history.insert(0, {"filename": filename, "model": meta["model"], "mode": meta["mode"], "characters": meta["characters"], "audio": audio_bytes})
         st.success("به تاریخچه همین نشست اضافه شد.")
 
 if st.session_state.history:
-    with st.expander(f"🕘 تاریخچه این نشست ({len(st.session_state.history)})", expanded=False):
+    with st.expander(f" تاریخچه این نشست ({len(st.session_state.history)})", expanded=False):
         for idx, item in enumerate(st.session_state.history):
             st.markdown(f"**{item['filename']}** · {item['model']} · {item['mode']} · {item['characters']} کاراکتر")
             st.audio(item["audio"], format="audio/wav")
