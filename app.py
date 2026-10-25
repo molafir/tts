@@ -9,7 +9,7 @@ import requests
 import streamlit as st
 from google import genai
 
-# Gemini 3.8 TTS Studio Pro — نسخه پایدار (اصلاح باگ آیکون‌ها)
+# Gemini 3.8 TTS Studio Pro — نسخه پایدار (اصلاح باگ تولید متن و آیکون‌ها)
 # Requires: streamlit, google-genai>=2.25.0, requests
 
 st.set_page_config(page_title="Gemini TTS Studio Pro", page_icon="🎙️", layout="wide")
@@ -303,10 +303,25 @@ def is_retriable(exc):
 
 
 def create_with_retry(client, **kwargs):
+    """تلاش مجدد برای درخواست‌های TTS (interactions)"""
     last_exc = None
     for attempt in range(RETRY_ATTEMPTS):
         try:
             return client.interactions.create(**kwargs)
+        except Exception as exc:
+            last_exc = exc
+            if attempt == RETRY_ATTEMPTS - 1 or not is_retriable(exc):
+                raise
+            time.sleep(RETRY_BASE_DELAY * (2 ** attempt))
+    raise last_exc
+
+
+def generate_text_with_retry(client, model, prompt):
+    """تلاش مجدد برای تولید متن با مدل‌های زبانی"""
+    last_exc = None
+    for attempt in range(RETRY_ATTEMPTS):
+        try:
+            return client.models.generate_content(model=model, contents=prompt)
         except Exception as exc:
             last_exc = exc
             if attempt == RETRY_ATTEMPTS - 1 or not is_retriable(exc):
@@ -539,8 +554,9 @@ with st.expander("🪄 تولید خودکار متن/گفت‌وگو", expanded
                     f"دربارهٔ «{topic}» بنویس. فقط خطوط گفت‌وگو را با قالب دقیق «گوینده ۱: متن» و "
                     "«گوینده ۲: متن» برگردان؛ توضیح اضافی ننویس."
                 )
-                response = create_with_retry(
-                    client, model="gemini-2.5-flash", contents=prompt
+                # اصلاح باگ: استفاده از متد generate_content به جای interactions.create
+                response = generate_text_with_retry(
+                    client, model="gemini-2.5-flash", prompt=prompt
                 )
                 st.session_state.generated_transcript = response.text or ""
             st.success("متن آماده شد.")
