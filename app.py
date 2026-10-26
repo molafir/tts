@@ -529,6 +529,156 @@ if "multi_text_value" not in st.session_state:
     st.session_state.multi_text_value = ""
 if "formatted_preview" not in st.session_state:
     st.session_state.formatted_preview = ""
+if "last_created_voice" not in st.session_state:
+    st.session_state.last_created_voice = None
+if "created_voices" not in st.session_state:
+    st.session_state.created_voices = []
+
+
+# ----------------------------- Voice Design helpers -----------------------------
+
+def create_prompted_voice(client, model_name, display_name, prompt_text, gender="", language_code="", store=True):
+    """ساخت صدای سفارشی از توضیح متنی (Voice Design)."""
+    voice_payload = {
+        "model": model_name,
+        "type": "prompted",
+        "display_name": display_name.strip() or "Custom Voice",
+        "prompted": {"input": prompt_text.strip()},
+    }
+    if gender and gender != "—":
+        voice_payload["gender"] = gender
+    if language_code and language_code.strip():
+        voice_payload["language_code"] = language_code.strip()
+    return client.voices.create(store=store, voice=voice_payload)
+
+
+def list_custom_voices(client, page_size=20):
+    """لیست صداهای سفارشی ذخیره‌شده در پروژه."""
+    try:
+        response = client.voices.list(type_=["prompted", "replicated"], page_size=page_size)
+        return list(response.voices or [])
+    except Exception:
+        return []
+
+
+# ----------------------------- Voice Design UI -----------------------------
+
+with st.expander("🎨 طراحی / ساخت صدای سفارشی (Voice Design)", expanded=False):
+    st.caption(
+        "با توضیح متنی یک شخصیت صوتی بسازید. شناسهٔ برگشتی (`voice_...`) را "
+        "در بخش «منبع صدا → سفارشی» وارد کنید. حداکثر ۲۰۰ صدای ذخیره‌شده در هر پروژه."
+    )
+    vd1, vd2 = st.columns(2)
+    with vd1:
+        vd_display_name = st.text_input("نام نمایشی صدا", value="راوی گرم فارسی", key="vd_name")
+        vd_gender = st.selectbox("جنسیت (اختیاری)", ["—", "male", "female", "neutral"], key="vd_gender")
+        vd_lang = st.text_input("کد زبان (اختیاری)", value="fa-IR", placeholder="fa-IR / en-US / ...", key="vd_lang")
+    with vd2:
+        vd_model = st.selectbox("مدل ساخت صدا", MODELS, index=0, key="vd_model")
+        vd_store = st.checkbox("ذخیره دائمی (store=True، تا ۱ سال)", value=True, key="vd_store")
+        st.caption("اگر غیرفعال باشد، شناسهٔ موقت `voicekey_...` با TTL هفت‌روزه برمی‌گردد.")
+
+    vd_prompt = st.text_area(
+        "توضیح شخصیت صدا",
+        height=100,
+        key="vd_prompt",
+        value=(
+            "یک راوی مرد میانسال با صدای گرم، آرام و واضح که به فارسی صحبت می‌کند. "
+            "لحن دوستانه و حرفه‌ای، مناسب پادکست و کتاب صوتی."
+        ),
+        placeholder="مثال: A warm, thoughtful narrator in his 40s with a gentle Persian accent...",
+    )
+
+    create_col, list_col = st.columns(2)
+    with create_col:
+        if st.button("✨ ساخت صدا", type="primary", use_container_width=True, key="vd_create_btn"):
+            if not vd_prompt.strip():
+                st.error("توضیح شخصیت صدا را وارد کنید.")
+            else:
+                try:
+                    with st.spinner("در حال طراحی صدا..."):
+                        created = create_prompted_voice(
+                            client,
+                            model_name=vd_model,
+                            display_name=vd_display_name,
+                            prompt_text=vd_prompt,
+                            gender=vd_gender,
+                            language_code=vd_lang,
+                            store=vd_store,
+                        )
+                    voice_id = getattr(created, "id", None) or str(created)
+                    sample_b64 = None
+                    sample_audio_obj = getattr(created, "sample_audio", None)
+                    if sample_audio_obj is not None:
+                        sample_b64 = getattr(sample_audio_obj, "data", None)
+
+                    entry = {
+                        "id": voice_id,
+                        "display_name": vd_display_name,
+                        "prompt": vd_prompt[:120],
+                        "sample": decode_b64(sample_b64) if sample_b64 else None,
+                    }
+                    st.session_state.last_created_voice = entry
+                    # جلوگیری از تکرار در لیست
+                    st.session_state.created_voices = [
+                        v for v in st.session_state.created_voices if v.get("id") != voice_id
+                    ]
+                    st.session_state.created_voices.insert(0, entry)
+                    st.session_state.created_voices = st.session_state.created_voices[:20]
+                    st.success(f"صدا ساخته شد · شناسه: `{voice_id}`")
+                except Exception as exc:
+                    st.error(f"ساخت صدا ناموفق بود: {exc}")
+                    with st.expander("جزئیات خطا", expanded=False):
+                        st.code(traceback.format_exc(), language="text")
+
+    with list_col:
+        if st.button("📋 بارگذاری صداهای ذخیره‌شده پروژه", use_container_width=True, key="vd_list_btn"):
+            try:
+                with st.spinner("در حال دریافت لیست..."):
+                    remote = list_custom_voices(client)
+                if not remote:
+                    st.info("هیچ صدای سفارشی ذخیره‌شده‌ای پیدا نشد.")
+                else:
+                    for v in remote:
+                        vid = getattr(v, "id", "")
+                        vname = getattr(v, "display_name", "") or vid
+                        # اضافه به لیست محلی اگر نبود
+                        if not any(x.get("id") == vid for x in st.session_state.created_voices):
+                            st.session_state.created_voices.append({
+                                "id": vid,
+                                "display_name": vname,
+                                "prompt": getattr(v, "description", "") or "",
+                                "sample": None,
+                            })
+                    st.success(f"{len(remote)} صدا از پروژه بارگذاری شد.")
+            except Exception as exc:
+                st.error(f"دریافت لیست ناموفق: {exc}")
+
+    # نمایش آخرین صدا و لیست ساخته‌شده‌ها
+    if st.session_state.last_created_voice:
+        lv = st.session_state.last_created_voice
+        st.markdown(f"**آخرین صدا:** `{lv['id']}` — {lv.get('display_name', '')}")
+        if lv.get("sample"):
+            st.audio(lv["sample"], format="audio/wav")
+            st.download_button(
+                "دانلود پیش‌نمایش WAV",
+                data=lv["sample"],
+                file_name=f"preview_{lv['id'][:16]}.wav",
+                mime="audio/wav",
+                key="vd_preview_dl",
+            )
+        st.code(lv["id"], language=None)
+        st.caption("شناسه را کپی کنید و در بخش «منبع صدا → سفارشی» بچسبانید.")
+
+    if st.session_state.created_voices:
+        st.markdown("**صداهای این نشست / بارگذاری‌شده:**")
+        for i, item in enumerate(st.session_state.created_voices):
+            cols = st.columns([3, 1, 1])
+            cols[0].code(item["id"], language=None)
+            cols[1].caption(item.get("display_name", "")[:30])
+            if item.get("sample"):
+                cols[2].audio(item["sample"], format="audio/wav")
+
 
 # ----------------------------- Generation config -----------------------------
 
