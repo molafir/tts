@@ -9,7 +9,7 @@ import requests
 import streamlit as st
 from google import genai
 
-# Gemini 3.8 TTS Studio Pro — نسخه پایدار (قابلیت انتخاب زبان فارسی/بلوچی/خودکار)
+# Gemini 3.8 TTS Studio Pro — نسخه پایدار (با منوی کشویی برای سبک بیان)
 # Requires: streamlit, google-genai>=2.25.0, requests
 
 st.set_page_config(page_title="Gemini TTS Studio Pro", page_icon="🎙️", layout="wide")
@@ -84,6 +84,21 @@ MIME_TYPES = {
     "PCM خطی L16": "audio/l16",
     "mu-law تلفنی": "audio/mulaw",
     "A-law تلفنی": "audio/alaw",
+}
+
+# لیست سبک‌های آماده برای انتخاب راحت‌تر
+PREDEFINED_STYLES = {
+    "— (بدون سبک خاص / پیش‌فرض)": "",
+    "گرم و مشتاق (Warm and enthusiastic)": "warm and enthusiastic, clear pacing",
+    "آرام و عمیق (Calm and deep)": "calm and deep, steady pacing",
+    "دوستانه و صمیمی (Friendly and gentle)": "friendly and gentle, approachable",
+    "هیجان‌زده و پرانرژی (Excited and energetic)": "excited and energetic",
+    "غمگین و آهسته (Sad and slow)": "sad and slow",
+    "گوینده خبر رسمی (News anchor)": "professional news anchor, formal tone",
+    "نجوا و مرموز (Whispering)": "whispering, mysterious",
+    "طنز و کنایه (Sarcastic)": "sarcastic, playful",
+    "سریع و هیجانی (Fast paced)": "speaking rapidly, excited",
+    "سفارشی (Custom)": "custom"
 }
 
 # برچسب‌های صوتی درون‌خطی پشتیبانی‌شده (مستندات Gemini 3.8 TTS)
@@ -537,26 +552,50 @@ if "created_voices" not in st.session_state:
 
 # ----------------------------- Voice Design helpers -----------------------------
 
+def sanitize_voice_prompt(prompt_text):
+    if not prompt_text:
+        return ""
+    forbidden_words = [
+        "کودک", "نوجوان", "جوان", "دختر", "پسر", "少女", "幼女", "子供", "10代",
+        "teen", "teenager", "child", "kid", "young girl", "young boy", "minor",
+        "لولی", "بچه", "نابالغ", "15 ساله", "16 ساله", "17 ساله", "13 ساله"
+    ]
+    sanitized = prompt_text
+    for word in forbidden_words:
+        sanitized = re.sub(re.escape(word), "", sanitized, flags=re.IGNORECASE)
+    sanitized = re.sub(r"\s+", " ", sanitized).strip()
+    return sanitized
+
+
 def create_prompted_voice(client, model_name, display_name, prompt_text, gender="", language_code=""):
-    """ساخت صدای سفارشی از توضیح متنی (Voice Design).
-    طبق API، ساخت prompted حتماً store=True می‌خواهد.
-    """
+    safe_prompt = sanitize_voice_prompt(prompt_text)
+    if not safe_prompt:
+        raise ValueError("پرامپت شما پس از پاک‌سازی خالی شد. لطفاً یک توصیف دیگر وارد کنید.")
+
     voice_payload = {
         "model": model_name,
         "type": "prompted",
         "display_name": display_name.strip() or "Custom Voice",
-        "prompted": {"input": prompt_text.strip()},
+        "prompted": {"input": safe_prompt},
     }
     if gender and gender != "—":
         voice_payload["gender"] = gender
     if language_code and language_code.strip():
         voice_payload["language_code"] = language_code.strip()
-    # Prompted voice creation requires store=true (API constraint)
-    return client.voices.create(store=True, voice=voice_payload)
+        
+    try:
+        return client.voices.create(store=True, voice=voice_payload)
+    except Exception as exc:
+        if "safety policies" in str(exc).lower():
+            raise ValueError(
+                "پرامپت شما توسط فیلتر ایمنی گوگل مسدود شد. "
+                "از کلماتی که به سن یا مشخصات ظاهری حساس اشاره دارند استفاده نکنید. "
+                "توصیف خود را ساده‌تر کنید."
+            )
+        raise exc
 
 
 def list_custom_voices(client, page_size=20):
-    """لیست صداهای سفارشی ذخیره‌شده در پروژه."""
     try:
         response = client.voices.list(type_=["prompted", "replicated"], page_size=page_size)
         return list(response.voices or [])
@@ -571,6 +610,8 @@ with st.expander("🎨 طراحی / ساخت صدای سفارشی (Voice Design
         "با توضیح متنی یک شخصیت صوتی بسازید. شناسهٔ برگشتی (`voice_...`) را "
         "در بخش «منبع صدا → سفارشی» وارد کنید. حداکثر ۲۰۰ صدای ذخیره‌شده در هر پروژه."
     )
+    st.warning("⚠️ از کلماتی مانند «کودک»، «نوجوان»، «سن پایین» یا توصیف‌های ظاهری حساس استفاده نکنید؛ این کلمات باعث مسدود شدن پرامپت می‌شوند.")
+    
     vd1, vd2 = st.columns(2)
     with vd1:
         vd_display_name = st.text_input("نام نمایشی صدا", value="راوی گرم فارسی", key="vd_name")
@@ -578,17 +619,17 @@ with st.expander("🎨 طراحی / ساخت صدای سفارشی (Voice Design
         vd_lang = st.text_input("کد زبان (اختیاری)", value="fa-IR", placeholder="fa-IR / en-US / ...", key="vd_lang")
     with vd2:
         vd_model = st.selectbox("مدل ساخت صدا", MODELS, index=0, key="vd_model")
-        st.info("ساخت Voice Design (prompted) طبق API حتماً با store=True ذخیره می‌شود (تا ۱ سال از آخرین استفاده).")
+        st.info("ساخت Voice Design (prompted) طبق API حتماً با store=True ذخیره می‌شود.")
 
     vd_prompt = st.text_area(
         "توضیح شخصیت صدا",
         height=100,
         key="vd_prompt",
         value=(
-            "یک راوی مرد میانسال با صدای گرم، آرام و واضح که به فارسی صحبت می‌کند. "
+            "یک راوی با صدای گرم، آرام و واضح که به فارسی صحبت می‌کند. "
             "لحن دوستانه و حرفه‌ای، مناسب پادکست و کتاب صوتی."
         ),
-        placeholder="مثال: A warm, thoughtful narrator in his 40s with a gentle Persian accent...",
+        placeholder="مثال: A warm, thoughtful narrator with a gentle Persian accent...",
     )
 
     create_col, list_col = st.columns(2)
@@ -620,7 +661,6 @@ with st.expander("🎨 طراحی / ساخت صدای سفارشی (Voice Design
                         "sample": decode_b64(sample_b64) if sample_b64 else None,
                     }
                     st.session_state.last_created_voice = entry
-                    # جلوگیری از تکرار در لیست
                     st.session_state.created_voices = [
                         v for v in st.session_state.created_voices if v.get("id") != voice_id
                     ]
@@ -643,7 +683,6 @@ with st.expander("🎨 طراحی / ساخت صدای سفارشی (Voice Design
                     for v in remote:
                         vid = getattr(v, "id", "")
                         vname = getattr(v, "display_name", "") or vid
-                        # اضافه به لیست محلی اگر نبود
                         if not any(x.get("id") == vid for x in st.session_state.created_voices):
                             st.session_state.created_voices.append({
                                 "id": vid,
@@ -655,7 +694,6 @@ with st.expander("🎨 طراحی / ساخت صدای سفارشی (Voice Design
             except Exception as exc:
                 st.error(f"دریافت لیست ناموفق: {exc}")
 
-    # نمایش آخرین صدا و لیست ساخته‌شده‌ها
     if st.session_state.last_created_voice:
         lv = st.session_state.last_created_voice
         st.markdown(f"**آخرین صدا:** `{lv['id']}` — {lv.get('display_name', '')}")
@@ -711,7 +749,6 @@ with st.expander("🪄 تولید خودکار متن/گفت‌وگو", expanded
     with g2:
         transcript_style = st.selectbox("سبک", ["پادکست", "مصاحبه", "گفت‌وگوی دوستانه", "بحث علمی", "داستان"])
     with g3:
-        # منوی کشویی برای انتخاب زبان
         language = st.selectbox("زبان تولید متن", ["فارسی", "بلوچی", "تشخیص خودکار"])
         
     word_count = st.slider("حدود کلمه", 50, 500, 150, step=25)
@@ -722,7 +759,6 @@ with st.expander("🪄 تولید خودکار متن/گفت‌وگو", expanded
                 spk1_name = st.session_state.get("speaker_name_1", "گوینده ۱")
                 spk2_name = st.session_state.get("speaker_name_2", "گوینده ۲")
                 
-                # منطق پرامپت بر اساس انتخاب کاربر
                 if language == "تشخیص خودکار":
                     lang_instruction = (
                         "زبان متن را به صورت خودکار تشخیص بده. اگر موضوع (Topic) به زبان بلوچی نوشته شده بود، "
@@ -785,7 +821,13 @@ if mode == "تک‌بلندگو":
                 help="شناسه برگشتی از Voice Design یا Voice Replication",
             ).strip()
     with v2:
-        style_single = st.text_input("سبک بیان", placeholder="warm and enthusiastic, clear pacing")
+        # تغییر: منوی کشویی سبک بیان
+        style_choice = st.selectbox("سبک بیان", list(PREDEFINED_STYLES.keys()), key="single_style_choice")
+        if style_choice == "سفارشی (Custom)":
+            style_single = st.text_input("سبک سفارشی (به انگلیسی)", placeholder="warm and enthusiastic", key="single_style_custom")
+        else:
+            style_single = PREDEFINED_STYLES[style_choice]
+            
     text_input = st.text_area("متن برای خواندن", key="single_text_value", height=240,
                               placeholder="متن را اینجا وارد کنید...")
 else:
@@ -810,7 +852,14 @@ else:
                 placeholder="voice_... یا voicekey_...",
                 key="custom_voice_1",
             ).strip()
-        style1 = st.text_input("سبک گوینده ۱", placeholder="calm and deep", key="style_1")
+            
+        # تغییر: منوی کشویی سبک گوینده ۱
+        style1_choice = st.selectbox("سبک گوینده ۱", list(PREDEFINED_STYLES.keys()), key="style1_choice")
+        if style1_choice == "سفارشی (Custom)":
+            style1 = st.text_input("سبک سفارشی ۱ (به انگلیسی)", placeholder="calm and deep", key="style_1_custom")
+        else:
+            style1 = PREDEFINED_STYLES[style1_choice]
+            
     with v2:
         speaker2 = st.text_input("نام گوینده ۲", "زن", key="speaker_name_2")
         voice2_source = st.radio(
@@ -831,7 +880,13 @@ else:
                 placeholder="voice_... یا voicekey_...",
                 key="custom_voice_2",
             ).strip()
-        style2 = st.text_input("سبک گوینده ۲", placeholder="warm and gentle", key="style_2")
+            
+        # تغییر: منوی کشویی سبک گوینده ۲
+        style2_choice = st.selectbox("سبک گوینده ۲", list(PREDEFINED_STYLES.keys()), key="style2_choice")
+        if style2_choice == "سفارشی (Custom)":
+            style2 = st.text_input("سبک سفارشی ۲ (به انگلیسی)", placeholder="warm and gentle", key="style_2_custom")
+        else:
+            style2 = PREDEFINED_STYLES[style2_choice]
 
     if not speaker1.strip() or not speaker2.strip() or speaker1.strip() == speaker2.strip():
         st.warning("نام دو گوینده باید غیرخالی و متفاوت باشد.")
