@@ -537,8 +537,10 @@ if "created_voices" not in st.session_state:
 
 # ----------------------------- Voice Design helpers -----------------------------
 
-def create_prompted_voice(client, model_name, display_name, prompt_text, gender="", language_code="", store=True):
-    """ساخت صدای سفارشی از توضیح متنی (Voice Design)."""
+def create_prompted_voice(client, model_name, display_name, prompt_text, gender="", language_code=""):
+    """ساخت صدای سفارشی از توضیح متنی (Voice Design).
+    طبق API، ساخت prompted حتماً store=True می‌خواهد.
+    """
     voice_payload = {
         "model": model_name,
         "type": "prompted",
@@ -549,7 +551,8 @@ def create_prompted_voice(client, model_name, display_name, prompt_text, gender=
         voice_payload["gender"] = gender
     if language_code and language_code.strip():
         voice_payload["language_code"] = language_code.strip()
-    return client.voices.create(store=store, voice=voice_payload)
+    # Prompted voice creation requires store=true (API constraint)
+    return client.voices.create(store=True, voice=voice_payload)
 
 
 def list_custom_voices(client, page_size=20):
@@ -575,8 +578,7 @@ with st.expander("🎨 طراحی / ساخت صدای سفارشی (Voice Design
         vd_lang = st.text_input("کد زبان (اختیاری)", value="fa-IR", placeholder="fa-IR / en-US / ...", key="vd_lang")
     with vd2:
         vd_model = st.selectbox("مدل ساخت صدا", MODELS, index=0, key="vd_model")
-        vd_store = st.checkbox("ذخیره دائمی (store=True، تا ۱ سال)", value=True, key="vd_store")
-        st.caption("اگر غیرفعال باشد، شناسهٔ موقت `voicekey_...` با TTL هفت‌روزه برمی‌گردد.")
+        st.info("ساخت Voice Design (prompted) طبق API حتماً با store=True ذخیره می‌شود (تا ۱ سال از آخرین استفاده).")
 
     vd_prompt = st.text_area(
         "توضیح شخصیت صدا",
@@ -604,7 +606,6 @@ with st.expander("🎨 طراحی / ساخت صدای سفارشی (Voice Design
                             prompt_text=vd_prompt,
                             gender=vd_gender,
                             language_code=vd_lang,
-                            store=vd_store,
                         )
                     voice_id = getattr(created, "id", None) or str(created)
                     sample_b64 = None
