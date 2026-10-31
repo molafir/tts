@@ -9,7 +9,7 @@ import requests
 import streamlit as st
 from google import genai
 
-# Gemini 3.8 TTS Studio Pro — نسخه پایدار (با تنظیمات ایمنی BLOCK_NONE برای عبور از فیلتر)
+# Gemini 3.8 TTS Studio Pro — نسخه پایدار (اصلاح ساختار safety_settings)
 # Requires: streamlit, google-genai>=2.25.0, requests
 
 st.set_page_config(page_title="Gemini TTS Studio Pro", page_icon="🎙️", layout="wide")
@@ -87,12 +87,12 @@ INLINE_TAGS = [
     "<snicker>", "<sob>", "<whimper>", "<whisper>", "<whispers>", "<whispering>",
 ]
 
-# تنظیمات ایمنی برای عبور از فیلترهای سخت‌گیرانه
+# ساختار صحیح safety_settings برای interactions.create (طبق مستندات)
 SAFETY_SETTINGS = [
-    {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE"},
-    {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_NONE"},
-    {"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": "BLOCK_NONE"},
-    {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_NONE"},
+    {"type": "harassment", "threshold": "block_none"},
+    {"type": "hate_speech", "threshold": "block_none"},
+    {"type": "sexually_explicit", "threshold": "block_none"},
+    {"type": "dangerous_content", "threshold": "block_none"},
 ]
 
 # ----------------------------- Utilities -----------------------------
@@ -183,7 +183,6 @@ def sanitize_input_text(text):
     }
     sanitized = text
     for word, replacement in replacements.items():
-        # استفاده از \b برای عدم تداخل با کلمات بلوچی یا سایر زبان‌ها
         sanitized = re.sub(rf"\b{re.escape(word)}\b", replacement, sanitized, flags=re.IGNORECASE)
     return sanitized
 
@@ -378,7 +377,7 @@ def generate_audio(client, model, input_blocks, speech_config, stream, mime_type
                     model=model, input=input_blocks,
                     response_format={"type": "audio"},
                     generation_config={"speech_config": speech_config},
-                    safety_settings=SAFETY_SETTINGS, # <--- اعمال تنظیمات ایمنی
+                    safety_settings=SAFETY_SETTINGS,
                     stream=True,
                 )
                 chunks = []
@@ -411,13 +410,17 @@ def generate_audio(client, model, input_blocks, speech_config, stream, mime_type
             model=model, input=input_blocks,
             response_format=response_format,
             generation_config={"speech_config": speech_config},
-            safety_settings=SAFETY_SETTINGS, # <--- اعمال تنظیمات ایمنی
+            safety_settings=SAFETY_SETTINGS,
         )
     except Exception as exc:
         if "content_blocked" in str(exc).lower() or "policy reason" in str(exc).lower():
             raise RuntimeError(
                 "متن شما توسط فیلتر ایمنی Gemini مسدود شد. "
                 "لطفاً کلمات حساس را جایگزین کنید یا متن را به بخش‌های کوچک‌تر تقسیم کنید."
+            ) from exc
+        if "validation error" in str(exc).lower() and "safety_settings" in str(exc).lower():
+            raise RuntimeError(
+                "ساختار safety_settings نامعتبر است. لطفاً از فرمت صحیح (type و threshold) استفاده کنید."
             ) from exc
         raise exc
 
@@ -820,6 +823,8 @@ if st.button("🎧 تولید صدا", type="primary", use_container_width=True,
             st.info("کلید API و مجوزهای پروژه Google AI را بررسی کنید.")
         elif "content_blocked" in msg or "policy reason" in msg:
             st.warning("⚠️ متن شما توسط فیلتر ایمنی Gemini مسدود شد. لطفاً کلمات حساس را جایگزین کنید یا متن را به بخش‌های کوچک‌تر تقسیم کنید.")
+        elif "validation error" in msg and "safety_settings" in msg:
+            st.warning("ساختار safety_settings نامعتبر است. لطفاً از فرمت صحیح (type و threshold) استفاده کنید.")
         elif "پارامترهای صوتی" in msg:
             st.info("بین بخش‌ها نرخ/کانال/عرض نمونه متفاوت شده است. تقسیم متن را غیرفعال کنید یا اندازه چانک را افزایش دهید.")
         with st.expander("🔍 جزئیات فنی خطا", expanded=False): st.code(traceback.format_exc(), language="text")
