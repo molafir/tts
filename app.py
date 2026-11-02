@@ -1,5 +1,5 @@
 # Gemini 3.8 TTS Studio Pro
-# هم‌تراز با مستندات Interactions API (نوشتار به گفتار، اکتبر ۲۰۲۶)
+# هم‌تراز با مستندات Interactions API (اکتبر ۲۰۲۶)
 # pip install "google-genai>=2.25.0" streamlit requests
 # streamlit run gemini_tts_studio.py
 import base64
@@ -77,7 +77,16 @@ PREDEFINED_STYLES = {
     "سفارشی (Custom)": "custom",
 }
 QUICK_TAGS = ["<short pause>", "<long pause>", "<laugh>", "<sigh>", "<breath>", "|oh hmm|", "|mm-hmm|", "|right|"]
-SAFETY_SETTINGS = [
+
+# ★ مطابق سند اکتبر ۲۰۲۶: در Interactions API از type و threshold کوچک استفاده می‌شود.
+INTERACTION_SAFETY_SETTINGS = [
+    {"type": "harassment", "threshold": "off"},
+    {"type": "hate_speech", "threshold": "off"},
+    {"type": "sexually_explicit", "threshold": "off"},
+    {"type": "dangerous_content", "threshold": "off"},
+]
+# ★ models.generate_content هنوز ساختار قدیمی category/threshold را می‌گیرد.
+TEXT_SAFETY_SETTINGS = [
     {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "OFF"},
     {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "OFF"},
     {"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": "OFF"},
@@ -335,20 +344,38 @@ def is_retriable(exc):
 
 def safety_rejected(exc):
     msg = str(exc).lower()
-    return "safety_setting" in msg or ("safety" in msg and any(k in msg for k in ("extra", "unknown", "unexpected", "forbidden", "invalid")))
+    if "safety_setting" in msg or "safety_settings" in msg:
+        return True
+    return "safety" in msg and any(k in msg for k in ("extra", "unknown", "unexpected", "forbidden", "invalid", "validation"))
+
+def drop_mode(kwargs):
+    gen = kwargs.get("generation_config")
+    if not isinstance(gen, dict):
+        return False
+    sc = gen.get("speech_config")
+    if isinstance(sc, dict) and "mode" in sc:
+        sc.pop("mode", None)
+        return True
+    return False
 
 def create_with_retry(client, **kwargs):
     last_exc = None
-    dropped = False
+    dropped_safety = False
+    dropped_mode = False
     for attempt in range(RETRY_ATTEMPTS):
         try:
             return client.interactions.create(**kwargs)
         except Exception as exc:
             last_exc = exc
-            if not dropped and safety_rejected(exc):
+            low = str(exc).lower()
+            if not dropped_safety and safety_rejected(exc):
                 kwargs.pop("safety_settings", None)
-                dropped = True
+                dropped_safety = True
                 continue
+            if not dropped_mode and ("mode" in low or "extra_forbidden" in low or "unknown field" in low):
+                if drop_mode(kwargs):
+                    dropped_mode = True
+                    continue
             if attempt == RETRY_ATTEMPTS - 1 or not is_retriable(exc):
                 raise
             time.sleep(RETRY_BASE_DELAY * (2 ** attempt))
@@ -358,7 +385,11 @@ def generate_text_with_retry(client, model, prompt):
     last_exc = None
     for attempt in range(RETRY_ATTEMPTS):
         try:
-            return client.models.generate_content(model=model, contents=prompt, config={"safety_settings": SAFETY_SETTINGS})
+            return client.models.generate_content(
+                model=model,
+                contents=prompt,
+                config={"safety_settings": TEXT_SAFETY_SETTINGS},
+            )
         except TypeError:
             return client.models.generate_content(model=model, contents=prompt)
         except Exception as exc:
@@ -374,7 +405,6 @@ def generate_text_with_retry(client, model, prompt):
     raise last_exc
 
 def build_single_input(text, voice, style):
-    # سند: تک‌بلندگو آرایه است. style خالی ارسال نمی‌شود تا متن کلمه‌به‌کلمه خوانده شود.
     content_item = {"type": "text", "text": text}
     style = (style or "").strip()
     if style:
@@ -382,7 +412,6 @@ def build_single_input(text, voice, style):
     return [{"type": "user_input", "content": [content_item]}], [{"voice": voice}]
 
 def build_multi_input(text, spk1, spk2, voice1, voice2, style1, style2, conversational=False):
-    # سند پایتون: speech_config یک شیء {"speakers": [...]} است، نه آرایه.
     blocks = []
     for line in text.splitlines():
         if not line.strip():
@@ -437,12 +466,13 @@ def generate_audio(client, model, input_blocks, speech_config, stream, mime_type
         "input": input_blocks,
         "response_format": fmt,
         "generation_config": {"speech_config": speech_config},
-        "safety_settings": SAFETY_SETTINGS,
+        "safety_settings": INTERACTION_SAFETY_SETTINGS,
     }
     if stream:
         kwargs["stream"] = True
         last_exc = None
-        dropped = False
+        dropped_safety = False
+        dropped_mode = False
         for attempt in range(RETRY_ATTEMPTS):
             try:
                 response = client.interactions.create(**kwargs)
@@ -461,10 +491,15 @@ def generate_audio(client, model, input_blocks, speech_config, stream, mime_type
                 return raw_to_wav(raw, "audio/l16", rate), raw, time.time() - started
             except Exception as exc:
                 last_exc = exc
-                if not dropped and safety_rejected(exc):
+                low = str(exc).lower()
+                if not dropped_safety and safety_rejected(exc):
                     kwargs.pop("safety_settings", None)
-                    dropped = True
+                    dropped_safety = True
                     continue
+                if not dropped_mode and ("mode" in low or "extra_forbidden" in low or "unknown field" in low):
+                    if drop_mode(kwargs):
+                        dropped_mode = True
+                        continue
                 if attempt == RETRY_ATTEMPTS - 1 or not is_retriable(exc):
                     raise
                 time.sleep(RETRY_BASE_DELAY * (2 ** attempt))
@@ -489,12 +524,14 @@ def explain_error(exc):
     low = err.lower()
     if "429" in err or "rate" in low or "quota" in low:
         return "سقف درخواست پر شده است. کمی صبر کنید یا مدل lite را انتخاب کنید."
-    if "404" in err or "not_found" in low or "model" in low and "not" in low:
+    if "404" in err or "not_found" in low:
         return "مدل یا شناسه صدا پیدا نشد. voice_ را دوباره بسازید یا نام پیش‌ساخته را چک کنید."
     if "content_blocked" in low or "policy" in low:
         return "فیلتر ایمنی پاسخ را بست."
     if "extra_forbidden" in low or "unknown field" in low:
         return "یک فیلد درخواست با این نسخه از SDK سازگار نیست. حالت conversational را خاموش کنید."
+    if "safety" in low:
+        return "تنظیمات ایمنی یا متن را تغییر دهید."
     return "کلید API، مدل و شناسه صدا را بررسی کنید."
 
 # ----------------------------- Sample / tag callbacks -----------------------------
