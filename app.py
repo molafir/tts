@@ -1,1387 +1,1170 @@
-# Gemini 3.8 TTS Studio Pro
-# هم‌تراز با راهنمای AI Studio تا ۲۸ اکتبر ۲۰۲۶ و صفحه مدل تا ۴ نوامبر ۲۰۲۶
-# سقف رسمی: ۸۱۹۲ توکن ورودی، ۱۶۳۸۴ توکن خروجی. هر دو مدل ۳.۸ یک طرح درخواست دارند.
-# pip install "google-genai>=2.25.0" streamlit requests
-# streamlit run gemini_tts_studio.py
+# -*- coding: utf-8 -*-
+"""Gemini TTS Studio Pro
+Persian RTL Streamlit app for Gemini 3.8 Flash TTS / Flash-Lite TTS.
+
+Install:
+    pip install -U "google-genai>=2.25.0" "streamlit>=1.42.0" requests
+Run:
+    streamlit run gemini_tts_studio_pro.py
+
+API key may be supplied through Streamlit secrets (GEMINI_API_KEY), an
+environment variable, or the sidebar. Telegram credentials are optional.
+"""
+
+from __future__ import annotations
+
 import base64
 import io
+import json
+import math
+import os
 import re
+import struct
 import time
-import traceback
 import wave
+from dataclasses import dataclass
+from typing import Any, Iterable, Optional
 
 import requests
 import streamlit as st
-from google import genai
 
-st.set_page_config(page_title="Gemini TTS Studio Pro", page_icon="🎙️", layout="wide")
+try:
+    from google import genai
+    from google.genai import types
+except ImportError:  # Friendly error in the UI
+    genai = None
+    types = None
 
-RTL_CSS = """
-<style>
-@import url('https://fonts.googleapis.com/css2?family=Vazirmatn:wght@400;600&family=Material+Symbols+Rounded:opsz,wght,FILL,GRAD@20..48,100..700,0..1,-50..200');
-html, body, p, h1, h2, h3, h4, h5, h6, label, .stMarkdown, .stText { font-family: 'Vazirmatn', 'Tahoma', sans-serif; }
-.material-symbols-rounded, .material-icons, [data-testid="stIconMaterial"], span[class*="material-symbols"] {
-    font-family: 'Material Symbols Rounded' !important; direction: ltr !important; font-feature-settings: 'liga' !important;
+
+APP_TITLE = "Gemini TTS Studio Pro"
+TTS_MODELS = {
+    "کیفیت و اجرای طبیعی‌تر — Flash": "gemini-3.8-flash-tts",
+    "سرعت و هزینه کمتر — Flash-Lite": "gemini-3.8-flash-lite-tts",
 }
-textarea, .stTextArea textarea, .stTextInput input { direction: rtl; text-align: right; font-family: 'Vazirmatn', 'Tahoma', sans-serif; }
-.stCodeBlock pre, .stCode pre { direction: rtl; text-align: right; font-size: 14px; line-height: 1.8; }
-.stButton > button { white-space: normal; height: auto; line-height: 1.35; }
-@media (max-width: 700px) {
-  div[data-testid="stHorizontalBlock"] { flex-wrap: wrap; }
-  div[data-testid="stHorizontalBlock"] > div[data-testid="column"] {
-    flex: 1 1 48% !important;
-    width: 48% !important;
-    min-width: 48% !important;
-  }
-  .stButton > button { font-size: 0.78rem; padding: 0.4rem 0.35rem; }
-}
-</style>
-"""
-st.markdown(RTL_CSS, unsafe_allow_html=True)
-st.title("🎙️ Gemini TTS Studio Pro")
-st.caption("Gemini 3.8 · Interactions API · کتابخانه صدا، طراحی صدا، استریم و تلگرام")
-
-# ----------------------------- Constants -----------------------------
-
-SAMPLE_RATES = [24000, 16000, 8000]
-INPUT_TOKEN_LIMIT = 8192
-OUTPUT_TOKEN_LIMIT = 16384
-HISTORY_LIMIT = 8
-RETRY_ATTEMPTS = 3
-RETRY_BASE_DELAY = 1.5
-CUSTOM_TURN_LIMIT = 40
-
-ALL_VOICES = [
+TEXT_MODEL = "gemini-3.8-flash"
+MAX_CHUNK_CHARS = 3500  # Conservative character-based split; not an API token count.
+PREBUILT_VOICES = [
     "Zephyr", "Puck", "Charon", "Kore", "Fenrir", "Leda", "Orus", "Aoede",
     "Callirrhoe", "Autonoe", "Enceladus", "Iapetus", "Umbriel", "Algieba",
     "Despina", "Erinome", "Algenib", "Rasalgethi", "Laomedeia", "Achernar",
     "Alnilam", "Schedar", "Gacrux", "Pulcherrima", "Achird", "Zubenelgenubi",
     "Vindemiatrix", "Sadachbia", "Sadaltager", "Sulafat",
 ]
-VOICE_DESCRIPTIONS = {
-    "Zephyr": "روشن", "Puck": "خوش‌بین", "Charon": "آموزنده", "Kore": "محکم",
-    "Fenrir": "هیجان‌انگیز", "Leda": "جوان", "Orus": "محکم", "Aoede": "ملایم",
-    "Callirrhoe": "آسان‌گیر", "Autonoe": "روشن", "Enceladus": "نفس‌گیر",
-    "Iapetus": "شفاف", "Umbriel": "آسان‌گیر", "Algieba": "صاف", "Despina": "صاف",
-    "Erinome": "پاک", "Algenib": "شنی", "Rasalgethi": "آموزنده", "Laomedeia": "خوش‌بین",
-    "Achernar": "نرم", "Alnilam": "محکم", "Schedar": "یکنواخت", "Gacrux": "بالغ",
-    "Pulcherrima": "پیشرو", "Achird": "دوستانه", "Zubenelgenubi": "غیررسمی",
-    "Vindemiatrix": "ملایم", "Sadachbia": "سرزنده", "Sadaltager": "آگاه", "Sulafat": "گرم",
-}
-MODELS = ["gemini-3.8-flash-lite-tts", "gemini-3.8-flash-tts"]
-MIME_TYPES = {
+AUDIO_MIME = {
     "WAV (پیشنهادی)": "audio/wav",
-    "PCM خطی L16": "audio/l16",
-    "mu-law تلفنی": "audio/mulaw",
-    "A-law تلفنی": "audio/alaw",
+    "PCM 16-bit / L16": "audio/l16",
+    "μ-law": "audio/mulaw",
+    "A-law": "audio/alaw",
 }
-RAW_EXT = {"audio/l16": "pcm", "audio/mulaw": "mulaw", "audio/alaw": "alaw"}
-PREDEFINED_STYLES = {
-    "— (بدون سبک خاص / پیش‌فرض)": "",
-    "گرم و مشتاق (Warm and enthusiastic)": "warm and enthusiastic, clear pacing",
-    "آرام و عمیق (Calm and deep)": "calm and deep, steady pacing",
-    "دوستانه و صمیمی (Friendly and gentle)": "friendly and gentle, approachable",
-    "هیجان‌زده و پرانرژی (Excited and energetic)": "excited and energetic",
-    "غمگین و آهسته (Sad and slow)": "sad and slow",
-    "گوینده خبر رسمی (News anchor)": "professional news anchor, formal tone",
-    "نجوا و مرموز (Whispering)": "whispering, mysterious",
-    "طنز و کنایه (Sarcastic)": "sarcastic, playful",
-    "سریع و هیجانی (Fast paced)": "speaking rapidly, excited",
-    "سفارشی (Custom)": "custom",
+CONSENT_TEXTS = {
+    "English (US/UK/India/Australia)": (
+        "I am the owner of this voice and I consent to Google using this voice to create a synthetic voice model."
+    ),
+    "العربية": "أنا مالك هذا الصوت وأوافق على أن تستخدم Google هذا الصوت لإنشاء نموذج صوتي اصطناعي.",
 }
-QUICK_TAGS = [
-    "<short pause>", "<long pause>", "<laugh>", "<sigh>",
-    "<breath>", "<gasp>", "<cough>", "<whispers>",
-    "|oh hmm|", "|oh really?|", "|absolutely|", "|ok|",
-]
 
-# ★ مطابق سند اکتبر ۲۰۲۶: در Interactions API از type و threshold کوچک استفاده می‌شود.
-INTERACTION_SAFETY_SETTINGS = [
-    {"type": "harassment", "threshold": "off"},
-    {"type": "hate_speech", "threshold": "off"},
-    {"type": "sexually_explicit", "threshold": "off"},
-    {"type": "dangerous_content", "threshold": "off"},
-]
-# ★ models.generate_content هنوز ساختار قدیمی category/threshold را می‌گیرد.
-TEXT_SAFETY_SETTINGS = [
-    {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "OFF"},
-    {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "OFF"},
-    {"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": "OFF"},
-    {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "OFF"},
-]
 
-# ----------------------------- Utilities -----------------------------
+# ----------------------------- Generic helpers -----------------------------
 
-def get_secret(name, default=""):
-    try:
-        return st.secrets.get(name, default)
-    except Exception:
+def obj_get(obj: Any, name: str, default: Any = None) -> Any:
+    if obj is None:
         return default
+    if isinstance(obj, dict):
+        return obj.get(name, default)
+    return getattr(obj, name, default)
 
-def decode_b64(value):
-    if not value:
-        return b""
-    if isinstance(value, (bytes, bytearray)):
-        return bytes(value)
-    return base64.b64decode(value)
 
-def pcm_to_wav_bytes(pcm, rate=24000, channels=1, sample_width=2):
+def safe_error(exc: Exception) -> str:
+    """Keep API errors readable without swallowing their underlying message."""
+    message = str(exc).strip() or exc.__class__.__name__
+    return message[:1800]
+
+
+def get_secret(name: str, default: str = "") -> str:
+    value = os.environ.get(name, "")
+    if value:
+        return value
+    try:
+        value = st.secrets.get(name, "")
+    except Exception:
+        value = ""
+    return str(value or default)
+
+
+def make_client(api_key: str):
+    if genai is None:
+        raise RuntimeError('کتابخانه google-genai نصب نیست. دستور نصب را در راهنمای برنامه اجرا کنید.')
+    if not api_key.strip():
+        raise RuntimeError("کلید Gemini API وارد نشده است.")
+    return genai.Client(api_key=api_key.strip())
+
+
+def decode_base64_or_bytes(value: Any) -> bytes:
+    if value is None:
+        raise ValueError("پاسخ API دادهٔ صوتی نداشت.")
+    if isinstance(value, bytes):
+        # SDK helpers may expose bytes directly; otherwise API docs use base64 text.
+        if value[:4] == b"RIFF":
+            return value
+        try:
+            return base64.b64decode(value, validate=True)
+        except Exception:
+            return value
+    if isinstance(value, str):
+        try:
+            return base64.b64decode(value, validate=True)
+        except Exception as exc:
+            raise ValueError("دادهٔ صوتی برگشتی، Base64 معتبر نیست.") from exc
+    raise TypeError(f"نوع دادهٔ صوتی ناشناخته است: {type(value).__name__}")
+
+
+def wav_metadata(wav_bytes: bytes) -> dict[str, Any]:
+    try:
+        with wave.open(io.BytesIO(wav_bytes), "rb") as wf:
+            return {
+                "channels": wf.getnchannels(),
+                "sample_rate": wf.getframerate(),
+                "sample_width": wf.getsampwidth(),
+                "frames": wf.getnframes(),
+                "compression": wf.getcomptype(),
+                "duration": wf.getnframes() / float(wf.getframerate()),
+            }
+    except (wave.Error, EOFError) as exc:
+        raise ValueError("فایل WAV معتبر یا قابل‌خواندن نیست.") from exc
+
+
+def pcm16_to_wav(pcm: bytes, sample_rate: int = 24000, channels: int = 1) -> bytes:
+    if len(pcm) % 2:
+        pcm = pcm[:-1]
     out = io.BytesIO()
     with wave.open(out, "wb") as wf:
         wf.setnchannels(channels)
-        wf.setsampwidth(sample_width)
-        wf.setframerate(int(rate))
+        wf.setsampwidth(2)
+        wf.setframerate(sample_rate)
         wf.writeframes(pcm)
     return out.getvalue()
 
-def wav_pcm(data):
-    if not data.startswith(b"RIFF"):
-        return data, None
-    with wave.open(io.BytesIO(data), "rb") as wf:
-        return wf.readframes(wf.getnframes()), wf.getframerate()
 
-def join_wavs(wav_list):
+def decode_mulaw_byte(value: int) -> int:
+    value = (~value) & 0xFF
+    sign = value & 0x80
+    exponent = (value >> 4) & 0x07
+    mantissa = value & 0x0F
+    sample = ((mantissa << 3) + 0x84) << exponent
+    sample -= 0x84
+    return -sample if sign else sample
+
+
+def decode_alaw_byte(value: int) -> int:
+    value ^= 0x55
+    t = (value & 0x0F) << 4
+    seg = (value & 0x70) >> 4
+    if seg == 0:
+        t += 8
+    elif seg == 1:
+        t += 0x108
+    else:
+        t += 0x108
+        t <<= seg - 1
+    return -t if (value & 0x80) == 0 else t
+
+
+def decode_g711(data: bytes, law: str) -> bytes:
+    decoder = decode_mulaw_byte if law == "mulaw" else decode_alaw_byte
+    out = bytearray()
+    for byte in data:
+        out.extend(struct.pack("<h", decoder(byte)))
+    return bytes(out)
+
+
+def encode_mulaw_sample(sample: int) -> int:
+    BIAS = 0x84
+    CLIP = 32635
+    sign = 0x80 if sample < 0 else 0
+    sample = min(abs(sample), CLIP) + BIAS
+    exponent = 7
+    mask = 0x4000
+    while exponent > 0 and not (sample & mask):
+        exponent -= 1
+        mask >>= 1
+    mantissa = (sample >> (exponent + 3)) & 0x0F
+    return (~(sign | (exponent << 4) | mantissa)) & 0xFF
+
+
+def encode_alaw_sample(sample: int) -> int:
+    # ITU-T G.711 A-law encoder.
+    if sample >= 0:
+        mask = 0xD5
+        pcm = sample
+    else:
+        mask = 0x55
+        pcm = -sample - 1
+    pcm = min(pcm, 32767)
+    segment_ends = (0xFF, 0x1FF, 0x3FF, 0x7FF, 0xFFF, 0x1FFF, 0x3FFF, 0x7FFF)
+    segment = 0
+    while segment < len(segment_ends) and pcm > segment_ends[segment]:
+        segment += 1
+    if segment >= 8:
+        return 0x7F ^ mask
+    value = segment << 4
+    if segment < 2:
+        value |= (pcm >> 4) & 0x0F
+    else:
+        value |= (pcm >> (segment + 3)) & 0x0F
+    return value ^ mask
+
+
+def pcm16_to_g711(pcm: bytes, law: str) -> bytes:
+    if len(pcm) % 2:
+        pcm = pcm[:-1]
+    encoder = encode_mulaw_sample if law == "mulaw" else encode_alaw_sample
+    return bytes(encoder(s[0]) for s in struct.iter_unpack("<h", pcm))
+
+
+def wav_to_pcm16(wav_bytes: bytes) -> tuple[bytes, int, int]:
+    with wave.open(io.BytesIO(wav_bytes), "rb") as wf:
+        if wf.getcomptype() != "NONE" or wf.getsampwidth() != 2:
+            raise ValueError("برای تبدیل فرمت، فقط WAV با PCM خطی 16-bit پشتیبانی می‌شود.")
+        channels = wf.getnchannels()
+        rate = wf.getframerate()
+        pcm = wf.readframes(wf.getnframes())
+    return pcm, rate, channels
+
+
+def join_wav_files(chunks: list[bytes]) -> bytes:
+    if not chunks:
+        raise ValueError("هیچ قطعهٔ صوتی برای اتصال وجود ندارد.")
+    base_params = None
     frames = []
-    rate = 24000
-    width = 2
-    channels = 1
-    for blob in wav_list:
-        with wave.open(io.BytesIO(blob), "rb") as wf:
-            channels = wf.getnchannels()
-            width = wf.getsampwidth()
-            rate = wf.getframerate()
+    for index, chunk in enumerate(chunks, start=1):
+        with wave.open(io.BytesIO(chunk), "rb") as wf:
+            params = (wf.getnchannels(), wf.getsampwidth(), wf.getframerate(), wf.getcomptype(), wf.getcompname())
+            if wf.getcomptype() != "NONE":
+                raise ValueError(f"قطعهٔ {index}: WAV فشرده است؛ اتصال مستقیم مجاز نیست.")
+            if base_params is None:
+                base_params = params
+            elif params != base_params:
+                raise ValueError(
+                    f"مشخصات قطعات WAV یکسان نیست؛ قطعهٔ {index} با قطعهٔ اول تفاوت دارد."
+                )
             frames.append(wf.readframes(wf.getnframes()))
     out = io.BytesIO()
     with wave.open(out, "wb") as wf:
-        wf.setnchannels(channels)
-        wf.setsampwidth(width)
-        wf.setframerate(rate)
+        wf.setnchannels(base_params[0])
+        wf.setsampwidth(base_params[1])
+        wf.setframerate(base_params[2])
         wf.writeframes(b"".join(frames))
     return out.getvalue()
 
-def mulaw_to_pcm16(data):
-    out = bytearray()
-    for value in data:
-        u = (~value) & 0xFF
-        t = (((u & 0x0F) << 3) + 0x84) << ((u & 0x70) >> 4)
-        sample = 0x84 - t if (u & 0x80) else t - 0x84
-        out.extend(int(max(-32768, min(32767, sample))).to_bytes(2, "little", signed=True))
-    return bytes(out)
 
-def alaw_to_pcm16(data):
-    out = bytearray()
-    for value in data:
-        a = value ^ 0x55
-        t = (a & 0x0F) << 4
-        seg = (a & 0x70) >> 4
-        if seg == 0:
-            t += 8
-        elif seg == 1:
-            t += 0x108
-        else:
-            t += 0x108
-            t <<= seg - 1
-        sample = t if (a & 0x80) else -t
-        out.extend(int(sample).to_bytes(2, "little", signed=True))
-    return bytes(out)
-
-def estimate_tokens(text):
-    """تخمین محافظه‌کارانه. شمارش توکن روی خود مدل TTS در مستند Enterprise پشتیبانی نشده."""
-    return max(1, (len(text or "") + 1) // 2)
-
-
-def is_custom_voice(voice):
-    v = (voice or "").strip()
-    return v.startswith("voice_") or v.startswith("voicekey_")
-
-def parse_speaker_line(line, spk1, spk2):
-    line = line.strip()
-    if not line:
-        return None, None
-    normalized = line.replace("：", ":").replace("﹕", ":")
-    if ":" in normalized:
-        prefix, txt = normalized.split(":", 1)
-        prefix, txt = prefix.strip(), txt.strip()
-        if prefix in (spk1, spk2):
-            return prefix, txt
-    return spk1, line
-
-def clean_text(text):
-    result = []
-    for line in text.splitlines():
-        line = re.sub(r"^[*_\s]+", "", line)
-        line = re.sub(r"[*_\s]+$", "", line)
-        result.append(line.strip("`\"'«»").strip())
-    return "\n".join(result)
-
-def sanitize_input_text(text):
-    if not text:
-        return text
-    replacements = {
-        "کشتار": "درگیری", "کشتن": "متوقف کردن", "مرگ": "پایان", "مرده": "بی‌حرکت",
-        "خون": "مایع قرمز", "خونی": "قرمز", "مواد مخدر": "مواد", "مخدر": "ماده",
-        "تجاوز": "تخطی", "اسلحه": "ابزار", "تفنگ": "ابزار", "بمب": "وسیله",
-        "انفجار": "صدا", "جنگ": "درگیری", "خودکشی": "آسیب به خود",
-        "قتل": "درگیری", "دزدی": "برداشتن", "فحش": "کلام نامناسب",
-        "kill": "stop", "murder": "incident", "death": "end", "dead": "still",
-        "blood": "red liquid", "drug": "substance", "gun": "tool", "weapon": "tool",
-        "bomb": "device", "war": "conflict", "suicide": "self-harm", "hate": "dislike",
-    }
-    sanitized = text
-    for word, replacement in replacements.items():
-        if re.search(r"[A-Za-z]", word):
-            sanitized = re.sub(rf"\b{re.escape(word)}\b", replacement, sanitized, flags=re.IGNORECASE)
-        else:
-            sanitized = sanitized.replace(word, replacement)
-    return sanitized
-
-def detect_strategy(text):
-    lines = [x.strip() for x in clean_text(text).splitlines() if x.strip()]
-    if not lines:
-        return "line"
-    dashes = sum(x.startswith(("-", "—", "–")) for x in lines)
-    if len(lines) >= 4 and dashes >= len(lines) * 0.5:
-        return "dash"
-    if text.count("\n\n") >= 2:
-        return "stanza"
-    if len(lines) >= 4 and sum(map(len, lines)) / len(lines) < 70:
-        return "couplet"
-    return "line"
-
-def format_multispeaker(raw, strategy, spk1, spk2, separator="---", mapping="", n_lines=2):
-    if strategy == "mapping":
-        pairs = {}
-        for pair in mapping.split(","):
-            if "=" in pair:
-                k, v = pair.split("=", 1)
-                pairs[k.strip()] = v.strip()
-        out = []
-        for line in clean_text(raw).splitlines():
-            if not line.strip():
-                continue
-            normalized = line.replace("：", ":")
-            if ":" in normalized:
-                prefix, txt = normalized.split(":", 1)
-                target = pairs.get(prefix.strip(), "1")
-                out.append(f"{spk1 if target in ('1', spk1) else spk2}: {txt.strip()}")
-            else:
-                out.append(f"{spk1}: {line.strip()}")
-        return "\n".join(out)
-    if strategy == "separator":
-        if not separator:
-            return ""
-        parts = [p.strip() for p in raw.split(separator) if p.strip()]
-        out = []
-        for i, part in enumerate(parts):
-            who = spk1 if i % 2 == 0 else spk2
-            out.extend(f"{who}: {line}" for line in clean_text(part).splitlines() if line.strip())
-        return "\n".join(out)
-    cleaned = clean_text(raw)
-    lines = [x.strip() for x in cleaned.splitlines() if x.strip()]
-    if strategy == "stanza":
-        stanzas, cur = [], []
-        for line in cleaned.splitlines():
-            if line.strip():
-                cur.append(line.strip())
-            elif cur:
-                stanzas.append(cur)
-                cur = []
-        if cur:
-            stanzas.append(cur)
-        return "\n".join(
-            f"{spk1 if i % 2 == 0 else spk2}: {line}"
-            for i, stanza in enumerate(stanzas) for line in stanza
-        )
-    out = []
-    for i, line in enumerate(lines):
-        if strategy == "dash":
-            has_dash = line.startswith(("-", "—", "–"))
-            spoken = line.lstrip("-—–").strip() if has_dash else line
-            out.append(f"{spk1 if has_dash else spk2}: {spoken}")
-        elif strategy == "couplet":
-            out.append(f"{spk1 if (i // 2) % 2 == 0 else spk2}: {line}")
-        elif strategy == "n_lines":
-            n = max(1, int(n_lines))
-            out.append(f"{spk1 if (i // n) % 2 == 0 else spk2}: {line}")
-        else:
-            out.append(f"{spk1 if i % 2 == 0 else spk2}: {line}")
-    return "\n".join(out)
-
-def split_text_safely(text, max_chars=3500):
+def split_long_text(text: str, max_chars: int = MAX_CHUNK_CHARS) -> list[str]:
+    """Split without dropping text; paragraph/sentence boundaries are preferred."""
     text = text.strip()
+    if not text:
+        return []
     if len(text) <= max_chars:
         return [text]
-    chunks, current = [], ""
-    units = re.split(r"(?<=[.!?؟。])\s+|\n", text)
-    for unit in units:
-        unit = unit.strip()
-        if not unit:
+    pieces: list[str] = []
+    paragraphs = re.split(r"\n\s*\n", text)
+    current = ""
+
+    def flush():
+        nonlocal current
+        if current.strip():
+            pieces.append(current.strip())
+        current = ""
+
+    for paragraph in paragraphs:
+        paragraph = paragraph.strip()
+        if not paragraph:
             continue
-        while len(unit) > max_chars:
-            if current:
-                chunks.append(current.strip())
-                current = ""
-            cut = unit.rfind(" ", 0, max_chars)
-            if cut < max_chars // 2:
-                cut = max_chars
-            chunks.append(unit[:cut].strip())
-            unit = unit[cut:].strip()
-        candidate = f"{current}\n{unit}".strip() if current else unit
-        if len(candidate) > max_chars and current:
-            chunks.append(current.strip())
-            current = unit
-        else:
-            current = candidate
-    if current:
-        chunks.append(current.strip())
-    return chunks
-
-def split_multispeaker_lines(text, max_chars=3500):
-    lines = [line for line in text.splitlines() if line.strip()]
-    chunks, current = [], ""
-    for line in lines:
-        if len(line) > max_chars:
-            if current:
-                chunks.append(current)
-                current = ""
-            chunks.append(line)
-            continue
-        candidate = f"{current}\n{line}".strip() if current else line
-        if current and len(candidate) > max_chars:
-            chunks.append(current)
-            current = line
-        else:
-            current = candidate
-    if current:
-        chunks.append(current)
-    return chunks or [text.strip()]
-
-def build_client(api_key):
-    return genai.Client(api_key=api_key)
-
-def is_retriable(exc):
-    msg = str(exc).lower()
-    tokens = ("429", "quota", "rate limit", "rate_limit", "timeout", "timed out", "temporarily", "500", "502", "503", "504")
-    return any(token in msg for token in tokens)
-
-def safety_rejected(exc):
-    msg = str(exc).lower()
-    if "safety_setting" in msg or "safety_settings" in msg:
-        return True
-    return "safety" in msg and any(k in msg for k in ("extra", "unknown", "unexpected", "forbidden", "invalid", "validation"))
-
-def drop_mode(kwargs):
-    gen = kwargs.get("generation_config")
-    if not isinstance(gen, dict):
-        return False
-    sc = gen.get("speech_config")
-    if isinstance(sc, dict) and "mode" in sc:
-        sc.pop("mode", None)
-        return True
-    return False
-
-def create_with_retry(client, **kwargs):
-    last_exc = None
-    dropped_safety = False
-    dropped_mode = False
-    for attempt in range(RETRY_ATTEMPTS):
-        try:
-            return client.interactions.create(**kwargs)
-        except Exception as exc:
-            last_exc = exc
-            low = str(exc).lower()
-            if not dropped_safety and safety_rejected(exc):
-                kwargs.pop("safety_settings", None)
-                dropped_safety = True
+        units = re.split(r"(?<=[.!?؟۔؛])\s+|\n", paragraph)
+        for unit in units:
+            unit = unit.strip()
+            if not unit:
                 continue
-            if not dropped_mode and ("mode" in low or "extra_forbidden" in low or "unknown field" in low):
-                if drop_mode(kwargs):
-                    dropped_mode = True
-                    continue
-            if attempt == RETRY_ATTEMPTS - 1 or not is_retriable(exc):
-                raise
-            time.sleep(RETRY_BASE_DELAY * (2 ** attempt))
-    raise last_exc
+            if len(unit) > max_chars:
+                flush()
+                # Hard split only when a single sentence/word is itself oversized.
+                for start in range(0, len(unit), max_chars):
+                    pieces.append(unit[start:start + max_chars].strip())
+                continue
+            candidate = f"{current}\n{unit}" if current else unit
+            if len(candidate) <= max_chars:
+                current = candidate
+            else:
+                flush()
+                current = unit
+        flush()
+    flush()
+    return [p for p in pieces if p]
 
-def generate_text_with_retry(client, model, prompt):
-    last_exc = None
-    for attempt in range(RETRY_ATTEMPTS):
-        try:
-            return client.models.generate_content(
-                model=model,
-                contents=prompt,
-                config={"safety_settings": TEXT_SAFETY_SETTINGS},
-            )
-        except TypeError:
-            return client.models.generate_content(model=model, contents=prompt)
-        except Exception as exc:
-            last_exc = exc
-            if safety_rejected(exc):
-                try:
-                    return client.models.generate_content(model=model, contents=prompt)
-                except Exception as inner:
-                    last_exc = inner
-            if attempt == RETRY_ATTEMPTS - 1 or not is_retriable(exc):
-                raise last_exc
-            time.sleep(RETRY_BASE_DELAY * (2 ** attempt))
-    raise last_exc
 
-def build_single_input(text, voice, style):
-    content_item = {"type": "text", "text": text}
-    style = (style or "").strip()
-    if style:
-        content_item["annotations"] = [{"type": "speech_metadata", "style": style}]
-    return [{"type": "user_input", "content": [content_item]}], [{"voice": voice}]
+@dataclass
+class Turn:
+    speaker: str
+    text: str
+    style: str = ""
 
-def build_multi_input(text, spk1, spk2, voice1, voice2, style1, style2, conversational=False):
-    blocks = []
-    for line in text.splitlines():
-        if not line.strip():
-            continue
-        speaker, content = parse_speaker_line(line, spk1, spk2)
-        if not content:
-            continue
-        style = style1 if speaker == spk1 else style2
-        annotation = {"type": "speech_metadata", "speaker": speaker}
-        if (style or "").strip():
-            annotation["style"] = style.strip()
-        blocks.append({"type": "text", "text": content, "annotations": [annotation]})
-    if not blocks:
-        raise ValueError("هیچ خط معتبری پیدا نشد. هر خط باید «نام: متن» باشد و نام‌ها با تنظیمات یکی باشند.")
-    config = {
-        "speakers": [
-            {"speaker": spk1, "voice": voice1},
-            {"speaker": spk2, "voice": voice2},
-        ]
+
+def parse_dialogue(raw: str, speaker_a: str, speaker_b: str, style_a: str, style_b: str) -> list[Turn]:
+    labels = {
+        speaker_a.casefold(): "a",
+        speaker_b.casefold(): "b",
+        "گوینده اول": "a", "گویندهٔ اول": "a", "گوینده ۱": "a",
+        "گوینده دوم": "b", "گویندهٔ دوم": "b", "گوینده ۲": "b",
+        "speaker 1": "a", "speaker a": "a", "a": "a", "1": "a",
+        "speaker 2": "b", "speaker b": "b", "b": "b", "2": "b",
     }
-    if conversational:
-        config["mode"] = "conversational"
-    return [{"type": "user_input", "content": blocks}], config
+    turns: list[Turn] = []
+    for raw_line in raw.splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+        match = re.match(r"^([^:：]{1,60})\s*[:：]\s*(.*)$", line)
+        if match and match.group(1).strip().casefold() in labels:
+            who = labels[match.group(1).strip().casefold()]
+            text = match.group(2).strip()
+        else:
+            # Unlabelled lines are assigned to speaker A; no prefix is injected into speech.
+            who, text = "a", line
+        if text:
+            turns.append(Turn(
+                speaker=speaker_a if who == "a" else speaker_b,
+                text=text,
+                style=style_a if who == "a" else style_b,
+            ))
+    return turns
 
-def response_format_for(stream, mime_type, sample_rate):
-    rate = int(sample_rate or 24000)
-    if stream and rate == 24000:
-        return {"type": "audio"}
-    if stream:
-        return {"type": "audio", "mime_type": "audio/l16", "sample_rate": rate}
-    fmt = {"type": "audio", "mime_type": mime_type}
-    if rate != 24000:
-        fmt["sample_rate"] = rate
-    return fmt
 
-def raw_to_wav(raw, mime_type, sample_rate):
-    rate = int(sample_rate or 24000)
-    if raw.startswith(b"RIFF"):
-        return raw
-    if mime_type == "audio/mulaw":
-        return pcm_to_wav_bytes(mulaw_to_pcm16(raw), rate=rate)
-    if mime_type == "audio/alaw":
-        return pcm_to_wav_bytes(alaw_to_pcm16(raw), rate=rate)
-    return pcm_to_wav_bytes(raw, rate=rate)
+def chunk_turns(turns: list[Turn], max_chars: int = MAX_CHUNK_CHARS) -> list[list[Turn]]:
+    """Split oversized turns and group adjacent turns without losing speaker labels."""
+    expanded: list[Turn] = []
+    for turn in turns:
+        for part in split_long_text(turn.text, max_chars=max_chars):
+            expanded.append(Turn(turn.speaker, part, turn.style))
+    groups: list[list[Turn]] = []
+    current: list[Turn] = []
+    current_size = 0
+    for turn in expanded:
+        add_size = len(turn.text)
+        if current and current_size + add_size > max_chars:
+            groups.append(current)
+            current, current_size = [], 0
+        current.append(turn)
+        current_size += add_size
+    if current:
+        groups.append(current)
+    return groups
 
-def generate_audio(client, model, input_blocks, speech_config, stream, mime_type, sample_rate):
-    started = time.time()
-    fmt = response_format_for(stream, mime_type, sample_rate)
-    rate = int(sample_rate or 24000)
-    kwargs = {
-        "model": model,
-        "input": input_blocks,
-        "response_format": fmt,
-        "generation_config": {"speech_config": speech_config},
-        "safety_settings": INTERACTION_SAFETY_SETTINGS,
-    }
-    if stream:
-        kwargs["stream"] = True
-        last_exc = None
-        dropped_safety = False
-        dropped_mode = False
-        for attempt in range(RETRY_ATTEMPTS):
-            try:
-                response = client.interactions.create(**kwargs)
-                chunks = []
-                for event in response:
-                    event_type = getattr(event, "event_type", None)
-                    if event_type in ("error", "interaction.error"):
-                        raise RuntimeError(f"خطای استریم: {getattr(event, 'error', event)}")
-                    if event_type == "step.delta":
-                        delta = getattr(event, "delta", None)
-                        if getattr(delta, "type", None) == "audio" and getattr(delta, "data", None):
-                            chunks.append(decode_b64(delta.data))
-                raw = b"".join(chunks)
-                if not raw:
-                    raise RuntimeError("استریم تمام شد اما داده صوتی نیامد.")
-                return raw_to_wav(raw, "audio/l16", rate), raw, time.time() - started
-            except Exception as exc:
-                last_exc = exc
-                low = str(exc).lower()
-                if not dropped_safety and safety_rejected(exc):
-                    kwargs.pop("safety_settings", None)
-                    dropped_safety = True
-                    continue
-                if not dropped_mode and ("mode" in low or "extra_forbidden" in low or "unknown field" in low):
-                    if drop_mode(kwargs):
-                        dropped_mode = True
-                        continue
-                if attempt == RETRY_ATTEMPTS - 1 or not is_retriable(exc):
-                    raise
-                time.sleep(RETRY_BASE_DELAY * (2 ** attempt))
-        raise last_exc
 
-    try:
-        response = create_with_retry(client, **kwargs)
-    except Exception as exc:
-        msg = str(exc).lower()
-        if "content_blocked" in msg or "policy" in msg or "prohibited" in msg:
-            raise RuntimeError(
-                "متن توسط فیلتر ایمنی Gemini مسدود شد. واژه‌ها را عوض کنید یا «نرم‌سازی واژه‌ها» را روشن کنید."
-            ) from exc
-        raise
-    raw = decode_b64(getattr(getattr(response, "output_audio", None), "data", None))
-    if not raw:
-        raise RuntimeError("API پاسخی بدون داده صوتی برگرداند.")
-    return raw_to_wav(raw, mime_type, rate), raw, time.time() - started
+# ------------------------------- Gemini TTS --------------------------------
 
-def explain_error(exc):
-    err = str(exc)
-    low = err.lower()
-    if "429" in err or "rate" in low or "quota" in low:
-        return "سقف درخواست پر شده است. کمی صبر کنید یا مدل lite را انتخاب کنید."
-    if "404" in err or "not_found" in low:
-        return "مدل یا شناسه صدا پیدا نشد. voice_ را دوباره بسازید یا نام پیش‌ساخته را چک کنید."
-    if "content_blocked" in low or "policy" in low:
-        return "فیلتر ایمنی پاسخ را بست."
-    if "extra_forbidden" in low or "unknown field" in low:
-        return "یک فیلد درخواست با این نسخه از SDK سازگار نیست. حالت conversational را خاموش کنید."
-    if "safety" in low:
-        return "تنظیمات ایمنی یا متن را تغییر دهید."
-    return "کلید API، مدل و شناسه صدا را بررسی کنید."
+def make_input_content(turns: list[Turn]) -> list[dict[str, Any]]:
+    content = []
+    for turn in turns:
+        annotation: dict[str, str] = {"type": "speech_metadata"}
+        if turn.speaker:
+            annotation["speaker"] = turn.speaker
+        if turn.style.strip():
+            annotation["style"] = turn.style.strip()
+        content.append({
+            "type": "text",
+            "text": turn.text,
+            "annotations": [annotation],
+        })
+    return [{"type": "user_input", "content": content}]
 
-# ----------------------------- Sample / tag callbacks -----------------------------
 
-def load_single_sample():
-    st.session_state.single_text_value = (
-        "سلام! به Gemini TTS Studio Pro خوش آمدید. <short pause> امیدوارم روز فوق‌العاده‌ای داشته باشید."
-    )
+def generate_one_chunk(
+    client: Any,
+    model: str,
+    turns: list[Turn],
+    mime_type: str,
+    sample_rate: int,
+    voice_a: str,
+    voice_b: Optional[str] = None,
+    speaker_a: str = "Speaker A",
+    speaker_b: str = "Speaker B",
+    use_stream: bool = False,
+) -> bytes:
+    content = make_input_content(turns)
+    if voice_b:
+        speech_config: Any = {
+            "mode": "conversational",
+            "speakers": [
+                {"speaker": speaker_a, "voice": voice_a},
+                {"speaker": speaker_b, "voice": voice_b},
+            ],
+        }
+    else:
+        speech_config = [{"voice": voice_a}]
 
-def load_multi_sample():
-    spk1 = st.session_state.get("speaker_name_1", "مرد")
-    spk2 = st.session_state.get("speaker_name_2", "زن")
-    st.session_state.multi_text_value = (
-        f"{spk1}: سلام! امروز چطوری؟\n"
-        f"{spk2}: خوبم، ممنون. تو چطور؟\n"
-        f"{spk1}: عالی‌ام! <laugh> آماده‌ای شروع کنیم؟\n"
-        f"{spk2}: همیشه آماده‌ام!"
-    )
-
-def load_poem_sample():
-    spk1 = st.session_state.get("speaker_name_1", "مرد")
-    spk2 = st.session_state.get("speaker_name_2", "زن")
-    st.session_state.multi_text_value = (
-        f"{spk1}: منی دل، منی نوجوانی توئے\n"
-        f"{spk1}: منی زینت و زندگانی توئے\n"
-        f"{spk2}: گمانی، سیائے دَنز و مُجاں\n"
-        f"{spk2}: من شاداں، منی شادمانی توئے"
-    )
-
-def load_backchannel_sample():
-    spk1 = st.session_state.get("speaker_name_1", "مرد")
-    spk2 = st.session_state.get("speaker_name_2", "زن")
-    st.session_state.multi_text_value = (
-        f"{spk1}: پس انتشار چهارشنبه است |جدی؟| واقعاً آماده‌ایم؟\n"
-        f"{spk2}: |آها| فکر کنم بله. <short pause> یک بار دیگر متن را بخوانیم."
-    )
-
-def append_tag(key, tag):
-    current = st.session_state.get(key, "") or ""
-    st.session_state[key] = (current.rstrip() + " " + tag).strip()
-
-def remember_voice(voice_id):
-    st.session_state.pending_voice_id = voice_id
-
-# ----------------------------- Telegram -----------------------------
-
-def send_to_telegram(file_bytes, filename, caption="", as_document=False):
-    token = get_secret("TELEGRAM_BOT_TOKEN")
-    chat_id = get_secret("TELEGRAM_CHAT_ID")
-    if not token or not chat_id:
-        return False, "توکن یا شناسه چت تلگرام در Secrets تنظیم نشده است."
-    method = "sendDocument" if as_document else "sendAudio"
-    field = "document" if as_document else "audio"
-    url = f"https://api.telegram.org/bot{token}/{method}"
-    try:
-        response = requests.post(
-            url,
-            data={"chat_id": chat_id, "caption": caption[:1024], "title": "Gemini TTS"},
-            files={field: (filename, io.BytesIO(file_bytes))},
-            timeout=(10, 90),
+    response_format: dict[str, Any] = {"type": "audio"}
+    if use_stream:
+        # Streaming TTS chunks are headerless 24 kHz mono PCM16 by default.
+        stream = client.interactions.create(
+            model=model,
+            input=content,
+            response_format=response_format,
+            generation_config={"speech_config": speech_config},
+            stream=True,
         )
-        try:
-            payload = response.json()
-        except ValueError:
-            payload = {}
-        if response.ok and payload.get("ok"):
-            return True, "فایل به تلگرام ارسال شد."
-        description = payload.get("description", response.text[:500])
-        return False, f"تلگرام خطا داد ({response.status_code}): {description}"
-    except requests.RequestException as exc:
-        return False, f"خطای اتصال به تلگرام: {exc}"
+        pcm_parts: list[bytes] = []
+        for event in stream:
+            if obj_get(event, "event_type") != "step.delta":
+                continue
+            delta = obj_get(event, "delta")
+            if obj_get(delta, "type") == "audio":
+                encoded = obj_get(delta, "data")
+                if encoded:
+                    pcm_parts.append(decode_base64_or_bytes(encoded))
+        pcm = b"".join(pcm_parts)
+        if not pcm:
+            raise RuntimeError("استریم تمام شد اما قطعهٔ صوتی دریافت نشد.")
+        return pcm16_to_wav(pcm, sample_rate=24000, channels=1)
 
-# ----------------------------- Sidebar -----------------------------
+    if mime_type != "audio/wav":
+        response_format["mime_type"] = mime_type
+        response_format["sample_rate"] = sample_rate
+    else:
+        response_format["mime_type"] = "audio/wav"
+
+    interaction = client.interactions.create(
+        model=model,
+        input=content,
+        response_format=response_format,
+        generation_config={"speech_config": speech_config},
+    )
+    audio = obj_get(obj_get(interaction, "output_audio"), "data")
+    return decode_base64_or_bytes(audio)
+
+
+def synthesize(
+    client: Any,
+    model: str,
+    text: str,
+    mode: str,
+    style: str,
+    voice_a: str,
+    voice_b: str,
+    speaker_a: str,
+    speaker_b: str,
+    style_a: str,
+    style_b: str,
+    mime_type: str,
+    sample_rate: int,
+    use_stream: bool,
+    progress_callback=None,
+) -> tuple[bytes, bytes, str]:
+    if mode == "تک‌گوینده":
+        chunks = split_long_text(text)
+        if not chunks:
+            raise ValueError("متن خالی است.")
+        turn_groups = [[Turn("", part, style)] for part in chunks]
+        voice_b_for_request = None
+    else:
+        turns = parse_dialogue(text, speaker_a, speaker_b, style_a, style_b)
+        if not turns:
+            raise ValueError("هیچ خط قابل‌خواندنی در گفت‌وگو پیدا نشد.")
+        turn_groups = chunk_turns(turns)
+        voice_b_for_request = voice_b
+
+    # For streaming only, force the documented raw PCM default and build WAVs.
+    if use_stream:
+        raw_chunks = []
+        for idx, group in enumerate(turn_groups, 1):
+            raw_chunks.append(generate_one_chunk(
+                client, model, group, "audio/wav", 24000, voice_a,
+                voice_b_for_request, speaker_a, speaker_b, True,
+            ))
+            if progress_callback:
+                progress_callback(idx, len(turn_groups))
+        playable_wav = join_wav_files(raw_chunks)
+        if mime_type == "audio/wav":
+            return playable_wav, playable_wav, "wav"
+        pcm, rate, channels = wav_to_pcm16(playable_wav)
+        raw = _convert_pcm_output(pcm, mime_type, rate, channels)
+        return raw, playable_wav, _extension_for_mime(mime_type)
+
+    audio_chunks = []
+    for idx, group in enumerate(turn_groups, 1):
+        audio_chunks.append(generate_one_chunk(
+            client, model, group, mime_type, sample_rate, voice_a,
+            voice_b_for_request, speaker_a, speaker_b, False,
+        ))
+        if progress_callback:
+            progress_callback(idx, len(turn_groups))
+
+    if mime_type == "audio/wav":
+        playable_wav = join_wav_files(audio_chunks)
+        return playable_wav, playable_wav, "wav"
+
+    raw = b"".join(audio_chunks)
+    if mime_type == "audio/l16":
+        playable_wav = pcm16_to_wav(raw, sample_rate=sample_rate, channels=1)
+    elif mime_type == "audio/mulaw":
+        playable_wav = pcm16_to_wav(decode_g711(raw, "mulaw"), sample_rate=sample_rate, channels=1)
+    elif mime_type == "audio/alaw":
+        playable_wav = pcm16_to_wav(decode_g711(raw, "alaw"), sample_rate=sample_rate, channels=1)
+    else:
+        raise ValueError(f"فرمت خروجی ناشناخته است: {mime_type}")
+    return raw, playable_wav, _extension_for_mime(mime_type)
+
+
+def _convert_pcm_output(pcm: bytes, mime_type: str, sample_rate: int, channels: int) -> bytes:
+    if channels != 1:
+        raise ValueError("تبدیل فرمت خروجی فقط برای صدای تک‌کاناله فعال است.")
+    if mime_type == "audio/l16":
+        return pcm
+    if mime_type == "audio/mulaw":
+        return pcm16_to_g711(pcm, "mulaw")
+    if mime_type == "audio/alaw":
+        return pcm16_to_g711(pcm, "alaw")
+    return pcm16_to_wav(pcm, sample_rate=sample_rate, channels=channels)
+
+
+def _extension_for_mime(mime_type: str) -> str:
+    return {
+        "audio/wav": "wav",
+        "audio/l16": "pcm",
+        "audio/mulaw": "mulaw",
+        "audio/alaw": "alaw",
+    }.get(mime_type, "bin")
+
+
+# ------------------------------ Voice library ------------------------------
+
+def voice_field(voice: Any, field: str, default: Any = "") -> Any:
+    value = obj_get(voice, field, default)
+    if value is None:
+        return default
+    return value
+
+
+def list_voices(client: Any, voice_types: list[str], search: str = "", max_pages: int = 10) -> list[Any]:
+    all_voices: list[Any] = []
+    page_token = None
+    for _ in range(max_pages):
+        kwargs: dict[str, Any] = {"type_": voice_types, "page_size": 100}
+        if search.strip():
+            kwargs["search"] = search.strip()
+        if page_token:
+            kwargs["page_token"] = page_token
+        response = client.voices.list(**kwargs)
+        voices = obj_get(response, "voices", []) or []
+        all_voices.extend(list(voices))
+        page_token = obj_get(response, "next_page_token", None)
+        if not page_token:
+            break
+    return all_voices
+
+
+def create_designed_voice(
+    client: Any, model: str, display_name: str, prompt: str, gender: str, language_code: str
+):
+    voice: dict[str, Any] = {
+        "model": model,
+        "type": "prompted",
+        "display_name": display_name.strip(),
+        "prompted": {"input": prompt.strip()},
+    }
+    if gender in {"male", "female"}:
+        voice["gender"] = gender
+    if language_code.strip():
+        voice["language_code"] = language_code.strip()
+    return client.voices.create(store=True, voice=voice)
+
+
+def create_remixed_voice(client: Any, base_voice: str, prompt: str, display_name: str):
+    # Voice remixing was added to the Gemini API changelog on 2026-11-04.
+    return client.voices.create(
+        store=True,
+        voice={
+            "model": "gemini-3.8-flash-tts",
+            "type": "prompted",
+            "display_name": display_name.strip(),
+            "prompted": {
+                "base_voice": base_voice.strip(),
+                "input": prompt.strip(),
+            },
+        },
+    )
+
+
+def validate_replication_wav(data: bytes, label: str, require_duration: bool = False) -> dict[str, Any]:
+    meta = wav_metadata(data)
+    if meta["channels"] != 1 or meta["sample_width"] != 2 or meta["sample_rate"] != 24000 or meta["compression"] != "NONE":
+        raise ValueError(
+            f"{label}: فایل باید WAV تک‌کاناله، PCM خطی 16-bit و 24000Hz باشد. "
+            f"مشخصات فعلی: channels={meta['channels']}, width={meta['sample_width']*8}bit, "
+            f"rate={meta['sample_rate']}Hz, compression={meta['compression']}"
+        )
+    if require_duration and not (10 <= meta["duration"] <= 30):
+        raise ValueError(f"{label}: مدت فایل مرجع باید بین 10 تا 30 ثانیه باشد؛ فعلی {meta['duration']:.1f} ثانیه است.")
+    return meta
+
+
+def create_replicated_voice(
+    client: Any,
+    model: str,
+    display_name: str,
+    source_audio: bytes,
+    consent_audio: bytes,
+    store: bool,
+):
+    validate_replication_wav(source_audio, "صدای مرجع", require_duration=True)
+    validate_replication_wav(consent_audio, "صدای رضایت")
+    voice: dict[str, Any] = {
+        "type": "replicated",
+        "display_name": display_name.strip() or "Replicated voice",
+        "replicated": {
+            "source_audio": {"mime_type": "audio/wav", "data": base64.b64encode(source_audio).decode("ascii")},
+            "consent_audio": {"mime_type": "audio/wav", "data": base64.b64encode(consent_audio).decode("ascii")},
+        },
+    }
+    if not store:
+        voice["model"] = model
+    else:
+        # The Gemini API developer docs show model on the stored replication request.
+        voice["model"] = model
+    return client.voices.create(store=store, voice=voice)
+
+
+def sample_audio_bytes(voice_obj: Any) -> Optional[bytes]:
+    sample = obj_get(voice_obj, "sample_audio")
+    data = obj_get(sample, "data")
+    if not data:
+        return None
+    return decode_base64_or_bytes(data)
+
+
+# ----------------------------- Text generation -----------------------------
+
+def generate_text(client: Any, prompt: str) -> str:
+    response = client.models.generate_content(model=TEXT_MODEL, contents=prompt)
+    text = obj_get(response, "text", "") or ""
+    if not text.strip():
+        raise RuntimeError("مدل متن خروجی خالی برگرداند.")
+    return text.strip()
+
+
+def transcribe_audio(client: Any, audio: bytes, mime_type: str, language_hint: str = "") -> str:
+    prompt = (
+        "Transcribe the supplied audio verbatim. Preserve the original language, "
+        "script, names, line breaks, and wording. Do not translate, summarize, "
+        "correct, or add commentary."
+    )
+    if language_hint.strip():
+        prompt += f" The likely language is {language_hint.strip()}, but do not translate."
+    audio_part = types.Part.from_bytes(data=audio, mime_type=mime_type)
+    response = client.models.generate_content(model=TEXT_MODEL, contents=[prompt, audio_part])
+    result = obj_get(response, "text", "") or ""
+    if not result.strip():
+        raise RuntimeError("متنی از فایل صوتی استخراج نشد.")
+    return result.strip()
+
+
+# -------------------------------- Telegram ----------------------------------
+
+def telegram_send(token: str, chat_id: str, audio_wav: bytes, filename: str, as_audio: bool = False) -> dict[str, Any]:
+    if not token.strip() or not chat_id.strip():
+        raise ValueError("توکن ربات و Chat ID تلگرام باید وارد شوند.")
+    method = "sendAudio" if as_audio else "sendDocument"
+    field = "audio" if as_audio else "document"
+    url = f"https://api.telegram.org/bot{token.strip()}/{method}"
+    files = {field: (filename, io.BytesIO(audio_wav), "audio/wav")}
+    response = requests.post(url, data={"chat_id": chat_id.strip()}, files=files, timeout=90)
+    try:
+        payload = response.json()
+    except ValueError:
+        raise RuntimeError(f"پاسخ تلگرام JSON نبود (HTTP {response.status_code}).")
+    if not response.ok or not payload.get("ok"):
+        raise RuntimeError(payload.get("description", f"Telegram HTTP {response.status_code}"))
+    return payload
+
+
+# ------------------------------- Streamlit UI -------------------------------
+
+st.set_page_config(page_title=APP_TITLE, page_icon="🎙️", layout="wide")
+st.markdown(
+    """
+    <style>
+    html, body, [class*="css"] { direction: rtl; text-align: right; }
+    .block-container { padding-top: 1.2rem; padding-bottom: 3rem; }
+    textarea, input, .stSelectbox, .stTextInput { direction: rtl; text-align: right; }
+    div[data-testid="stFileUploader"] { direction: rtl; }
+    .small-note {font-size: .88rem; color: #777;}
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
+
+st.title("🎙️ Gemini TTS Studio Pro")
+st.caption("تبدیل متن به گفتار، گفت‌وگوی دوگوینده، طراحی و بازترکیب صدا، تکثیر با رضایت، کتابخانهٔ صدا و ارسال تلگرام")
+
+if "last_audio_wav" not in st.session_state:
+    st.session_state.last_audio_wav = None
+if "last_audio_raw" not in st.session_state:
+    st.session_state.last_audio_raw = None
+if "last_audio_ext" not in st.session_state:
+    st.session_state.last_audio_ext = "wav"
+if "last_audio_mime" not in st.session_state:
+    st.session_state.last_audio_mime = "audio/wav"
+if "last_voice_id" not in st.session_state:
+    st.session_state.last_voice_id = ""
+if "voice_key" not in st.session_state:
+    st.session_state.voice_key = ""
+if "generated_text" not in st.session_state:
+    st.session_state.generated_text = ""
 
 with st.sidebar:
-    st.header("راهنما")
-    st.markdown(
-        "**مدل‌ها**\n"
-        "- `gemini-3.8-flash-lite-tts` پیش‌فرض\n"
-        "- `gemini-3.8-flash-tts` کیفیت بالاتر"
-    )
-    st.info(
-        "تک‌بلندگو: `speech_config` آرایه است.\n\n"
-        "چندبلندگو با صدای پیش‌ساخته: شیء `speakers`.\n\n"
-        "استریم پیش‌فرض PCM خام ۲۴ کیلوهرتز است و اینجا به WAV تبدیل می‌شود."
-    )
-    st.markdown(
-        "**برچسب داخل متن** (خوانده نمی‌شود، اجرا می‌شود)\n\n"
-        "`<short pause>` `<laugh>` `<sigh>` `<breath>` `<gasp>` `<cough>`\n\n"
-        "برای متن غیرانگلیسی هم خودِ برچسب را انگلیسی بگذارید.\n\n"
-        "**واکنش شنونده** با خط عمودی، داخل همان نوبت (بهتر با مدل flash):\n\n"
-        "`|oh hmm|` `|oh really?|` `|absolutely|`"
-    )
-    st.warning(
-        "صدای `voice_` و `voicekey_` را نمی‌توان در یک درخواست چندبلندگو گذاشت. "
-        "هر نوبت جدا ساخته و بعد به هم وصل می‌شود. سقف ۲۰۰ صدای ذخیره‌شده، ماندگاری یک سال.\n\n"
-        f"سقف ورودی هر درخواست **{INPUT_TOKEN_LIMIT:,}** توکن و سقف خروجی صوتی **{OUTPUT_TOKEN_LIMIT:,}** توکن است. "
-        "مدل lite برای حجم بالا و تک‌گویی روزمره است؛ برای دیالوگ پیچیده و لهجه، flash را انتخاب کنید. "
-        "مدل‌های پیش‌نمایش ۲.۵ و ۳.۱ این طرح `speech_metadata` را ندارند."
-    )
-    if get_secret("TELEGRAM_BOT_TOKEN") and get_secret("TELEGRAM_CHAT_ID"):
-        st.success("تلگرام پیکربندی شده")
-    else:
-        st.caption("تلگرام: TELEGRAM_BOT_TOKEN و TELEGRAM_CHAT_ID را در Secrets بگذارید.")
+    st.header("اتصال و تنظیمات")
+    api_default = get_secret("GEMINI_API_KEY")
+    api_key = st.text_input("Gemini API Key", value=api_default, type="password", help="کلید را می‌توانید در Streamlit Secrets با نام GEMINI_API_KEY ذخیره کنید.")
+    model_label = st.selectbox("مدل گفتار", list(TTS_MODELS.keys()), index=0)
+    selected_model = TTS_MODELS[model_label]
+    st.divider()
+    st.subheader("تلگرام — اختیاری")
+    tg_token = st.text_input("Bot Token", value=get_secret("TELEGRAM_BOT_TOKEN"), type="password")
+    tg_chat_id = st.text_input("Chat ID", value=get_secret("TELEGRAM_CHAT_ID"))
+    st.caption("برای WAV، ارسال به‌صورت فایل (sendDocument) انتخاب مناسب‌تری است.")
+    st.divider()
+    st.caption("مدل‌های TTS این نسخه: Gemini 3.8 Flash TTS و Flash-Lite TTS")
 
-# ----------------------------- API key -----------------------------
 
-secret_api_key = get_secret("GEMINI_API_KEY")
-with st.expander("🔑 دسترسی API", expanded=not bool(secret_api_key)):
-    if secret_api_key:
-        st.success("کلید از Secrets خوانده می‌شود.")
-        api_key = secret_api_key
-    else:
-        api_key = st.text_input("کلید API Gemini", type="password", key="api_key_input")
-        st.caption("در میزبانی، GEMINI_API_KEY را در Secrets بگذارید. کلید از https://aistudio.google.com/apikey")
-if not api_key:
-    st.info("برای شروع، کلید API را وارد کنید.")
-    st.stop()
-try:
-    client = build_client(api_key)
-except Exception as exc:
-    st.error(f"ساخت کلاینت ناموفق بود: {exc}")
-    st.stop()
+def obtain_client():
+    return make_client(api_key)
 
-# ----------------------------- Session -----------------------------
 
-for key, value in {
-    "generated_transcript": "",
-    "history": [],
-    "single_text_value": "",
-    "multi_text_value": "",
-    "formatted_preview": "",
-    "last_created_voice": None,
-    "created_voices": [],
-    "library_rows": [],
-    "library_page_token": "",
-    "pending_voice_id": "",
-    "last_result": None,
-}.items():
-    if key not in st.session_state:
-        st.session_state[key] = value
+def _copy_generated_to_tts() -> None:
+    value = st.session_state.get("generated_text_view") or st.session_state.get("generated_text", "")
+    st.session_state.single_text = value
+    st.session_state.transfer_notice = "متن در ورودی تک‌گوینده قرار گرفت."
 
-# ----------------------------- Voice design -----------------------------
 
-def sanitize_voice_prompt(prompt_text):
-    if not prompt_text:
-        return ""
-    forbidden = [
-        "کودک", "نوجوان", "بچه", "نابالغ", "دختر بچه", "پسر بچه",
-        "teen", "teenager", "child", "kid", "minor", "young girl", "young boy",
-    ]
-    sanitized = prompt_text
-    for word in forbidden:
-        sanitized = re.sub(re.escape(word), "", sanitized, flags=re.IGNORECASE)
-    return re.sub(r"\s+", " ", sanitized).strip()
+def _copy_transcript_to_tts() -> None:
+    value = st.session_state.get("transcript_result") or st.session_state.get("transcribed_text", "")
+    st.session_state.single_text = value
+    st.session_state.transcript_transfer_notice = "متن رونویسی‌شده در ورودی تک‌گوینده قرار گرفت."
 
-def create_prompted_voice(client, model_name, display_name, prompt_text, gender="", language_code=""):
-    safe_prompt = sanitize_voice_prompt(prompt_text)
-    if not safe_prompt:
-        raise ValueError("بعد از پاک‌سازی، توضیح صدا خالی شد.")
-    voice_payload = {
-        "model": model_name,
-        "type": "prompted",
-        "display_name": (display_name or "Custom Voice").strip()[:80] or "Custom Voice",
-        "prompted": {"input": safe_prompt[:2000]},
-    }
-    if gender and gender != "—":
-        voice_payload["gender"] = gender
-    if language_code and language_code.strip():
-        voice_payload["language_code"] = language_code.strip()
-    try:
-        return client.voices.create(store=True, voice=voice_payload)
-    except Exception as exc:
-        if "safety" in str(exc).lower():
-            raise ValueError(
-                "توضیح صدا توسط فیلتر ایمنی بسته شد. سن و توصیف ظاهری حساس را حذف کنید."
-            ) from exc
-        raise
 
-def voice_sample_wav(created):
-    sample = getattr(created, "sample_audio", None)
-    if sample is None:
-        return None
-    raw = decode_b64(getattr(sample, "data", None))
-    if not raw:
-        return None
-    mime = (getattr(sample, "mime_type", "") or "").lower()
-    if raw.startswith(b"RIFF"):
-        return raw
-    if "mulaw" in mime:
-        return pcm_to_wav_bytes(mulaw_to_pcm16(raw))
-    if "alaw" in mime:
-        return pcm_to_wav_bytes(alaw_to_pcm16(raw))
-    return pcm_to_wav_bytes(raw)
+def _use_selected_voice() -> None:
+    value = st.session_state.get("selected_library_voice_id", "")
+    if value:
+        st.session_state.single_custom_voice = value
+        st.session_state.multi_custom_a = value
+        st.session_state.last_voice_id = value
+        st.session_state.voice_use_notice = "شناسهٔ انتخاب‌شده در فیلد صدای سفارشی قرار گرفت."
 
-def voice_identifier(created, store=True):
-    if not store:
-        return getattr(created, "key", None) or getattr(created, "id", "") or ""
-    return getattr(created, "id", None) or getattr(created, "key", "") or ""
 
-def register_voice(created, display_name, store=True):
-    ident = voice_identifier(created, store)
-    entry = {
-        "id": ident,
-        "display_name": display_name or ident,
-        "sample": voice_sample_wav(created),
-    }
-    st.session_state.last_created_voice = entry
-    st.session_state.created_voices = [v for v in st.session_state.created_voices if v.get("id") != ident]
-    st.session_state.created_voices.insert(0, entry)
-    st.session_state.created_voices = st.session_state.created_voices[:20]
-    if ident:
-        st.session_state.pending_voice_id = ident
-    return ident
+tab_tts, tab_text, tab_voices, tab_transcribe, tab_help = st.tabs([
+    "تولید گفتار", "استودیوی متن", "مدیریت صداها", "رونویسی فایل صوتی", "راهنما"
+])
 
-CONSENT_EN = (
-    "I am the owner of this voice and I consent to Google using this voice "
-    "to create a synthetic voice model."
-)
-
-with st.expander("🎨 طراحی صدای سفارشی", expanded=False):
-    st.caption("POST voices با type=prompted و store=true. شناسه voice_ را بعداً در منبع صدای سفارشی بگذارید. سقف ۲۰۰ صدا.")
-    vd1, vd2 = st.columns(2)
-    with vd1:
-        vd_display_name = st.text_input("نام نمایشی", value="راوی گرم فارسی", key="vd_name")
-        vd_gender = st.selectbox("جنسیت", ["—", "female", "male", "neutral"], key="vd_gender")
-        vd_lang = st.text_input("کد زبان", value="fa-IR", key="vd_lang")
-    with vd2:
-        vd_model = st.selectbox("مدل ساخت", MODELS, index=0, key="vd_model")
-        st.caption("شخصیت را یک‌بار اینجا بسازید. در style گفتار، سن و لهجه را تکرار نکنید.")
-    vd_prompt = st.text_area(
-        "توضیح شخصیت",
-        height=90,
-        key="vd_prompt",
-        value="یک راوی بزرگسال با صدای گرم، آرام و واضح، مناسب پادکست.",
-    )
-    b1, b2 = st.columns(2)
-    if b1.button("ساخت صدا", type="primary", use_container_width=True, key="vd_create_btn"):
-        try:
-            with st.spinner("در حال طراحی صدا..."):
-                created = create_prompted_voice(client, vd_model, vd_display_name, vd_prompt, vd_gender, vd_lang)
-            voice_id = register_voice(created, vd_display_name, store=True)
-            st.success(f"ساخته شد: {voice_id}")
-        except Exception as exc:
-            st.error(f"ساخت صدا ناموفق بود: {exc}")
-            with st.expander("جزئیات"):
-                st.code(traceback.format_exc(), language="text")
-    if b2.button("صداهای ذخیره‌شده پروژه", use_container_width=True, key="vd_list_btn"):
-        try:
-            with st.spinner("دریافت لیست..."):
-                response = client.voices.list(type_=["prompted", "replicated"], page_size=20)
-            remote = list(response.voices or [])
-            if not remote:
-                st.info("صدای سفارشی ذخیره‌شده‌ای نیست.")
-            else:
-                for voice in remote:
-                    vid = getattr(voice, "id", "")
-                    prompted = getattr(voice, "prompted", None)
-                    base = getattr(prompted, "base_voice", "") if prompted else ""
-                    if vid and not any(x.get("id") == vid for x in st.session_state.created_voices):
-                        st.session_state.created_voices.append({
-                            "id": vid,
-                            "display_name": getattr(voice, "display_name", "") or vid,
-                            "sample": None,
-                            "base": base or "",
-                            "kind": getattr(voice, "type", "") or "",
-                        })
-                st.success(f"{len(remote)} صدا بارگذاری شد.")
-        except Exception as exc:
-            st.error(f"لیست صداها ناموفق بود. google-genai>=2.25.0 لازم است. {exc}")
-    if st.session_state.last_created_voice:
-        lv = st.session_state.last_created_voice
-        st.markdown(f"آخرین شناسه: `{lv['id']}`")
-        if lv.get("sample"):
-            st.audio(lv["sample"], format="audio/wav")
-        if st.button("استفاده از این شناسه در گفتار", key="use_last_voice"):
-            remember_voice(lv["id"])
-            st.rerun()
-
-with st.expander("بازترکیب صدا", expanded=False):
-    st.caption(
-        "همان POST voices با type=prompted، به‌اضافه prompted.base_voice. "
-        "صدای پایه عوض نمی‌شود؛ یک voice_ تازه ذخیره می‌شود. ساخت با flash است و شناسه روی هر دو مدل کار می‌کند. طرح پولی لازم است."
-    )
-    r1, r2 = st.columns(2)
-    with r1:
-        remix_base_pick = st.selectbox("صدای پایه پیش‌ساخته", ALL_VOICES, index=ALL_VOICES.index("Puck"), key="remix_base_pick")
-        remix_base_custom = st.text_input("یا شناسه پایهٔ دیگر", placeholder="voice_... یا نام کتابخانه", key="remix_base_custom")
-    with r2:
-        remix_name = st.text_input("نام نمایشی", value="نسخه بازترکیب‌شده", key="remix_name")
-        st.caption("یک یا دو ویژگی را عوض کنید: سن، زیروبم، انرژی، لهجه یا سرعت.")
-    remix_prompt = st.text_area(
-        "تغییر نسبت به صدای پایه",
-        height=80,
-        key="remix_prompt",
-        value="Make the voice slightly older, warmer, and a little lower in pitch.",
-    )
-    if st.button("ساخت نسخه تازه", type="primary", key="remix_btn"):
-        base = (remix_base_custom or "").strip() or remix_base_pick
-        instruction = sanitize_voice_prompt(remix_prompt)
-        if not instruction:
-            st.error("توضیح تغییر را بنویسید.")
-        else:
-            try:
-                with st.spinner("در حال بازترکیب..."):
-                    created = client.voices.create(
-                        store=True,
-                        voice={
-                            "model": "gemini-3.8-flash-tts",
-                            "type": "prompted",
-                            "display_name": (remix_name or "Remixed").strip()[:80],
-                            "prompted": {"base_voice": base, "input": instruction[:2000]},
-                        },
-                    )
-                ident = register_voice(created, remix_name, store=True)
-                st.success(f"نسخه تازه: {ident}")
-            except Exception as exc:
-                st.error(f"بازترکیب ناموفق بود: {exc}")
-
-with st.expander("تکثیر صدا", expanded=False):
-    st.caption(
-        "دو فایل WAV از یک گویندهٔ بزرگسال: ۱۰ تا ۳۰ ثانیه گفتار، و خواندن دقیق جملهٔ رضایت. "
-        "۲۴ کیلوهرتز، مونو، ۱۶ بیت بهتر است. طرح پولی لازم است. واترمارک SynthID روی خروجی می‌ماند."
-    )
-    st.code(CONSENT_EN, language=None)
-    st.caption("فارسی در فهرست ۳۰ زبان جملهٔ رضایت نیست. جمله باید همان متن یکی از زبان‌های سند، مثلاً انگلیسی، باشد.")
-    rep1, rep2 = st.columns(2)
-    with rep1:
-        source_file = st.file_uploader("گفتار مرجع", type=["wav"], key="rep_source")
-        consent_file = st.file_uploader("فایل رضایت", type=["wav"], key="rep_consent")
-    with rep2:
-        rep_name = st.text_input("نام نمایشی", value="گوینده تکثیرشده", key="rep_name")
-        rep_store = st.checkbox("ذخیره در پروژه (voice_)", value=True, key="rep_store", help="خاموش یعنی کلید بی‌حالت voicekey_ با عمر ۷ روز.")
-        rep_model = st.selectbox("مدل ساخت", MODELS, index=1 if len(MODELS) > 1 else 0, key="rep_model")
-    if st.button("تکثیر", type="primary", key="rep_btn"):
-        if source_file is None or consent_file is None:
-            st.error("هر دو فایل WAV لازم است.")
-        else:
-            try:
-                source_b64 = base64.b64encode(source_file.getvalue()).decode("utf-8")
-                consent_b64 = base64.b64encode(consent_file.getvalue()).decode("utf-8")
-                voice_body = {
-                    "model": rep_model,
-                    "type": "replicated",
-                    "replicated": {
-                        "source_audio": {"mime_type": "audio/wav", "data": source_b64},
-                        "consent_audio": {"mime_type": "audio/wav", "data": consent_b64},
-                    },
-                }
-                if rep_store:
-                    voice_body["display_name"] = (rep_name or "Replicated").strip()[:80]
-                with st.spinner("در حال تأیید و تکثیر..."):
-                    created = client.voices.create(store=rep_store, voice=voice_body)
-                ident = register_voice(created, rep_name, store=rep_store)
-                st.success(f"ساخته شد: {ident}")
-                if not rep_store:
-                    st.caption("این کلید ۷ روز اعتبار دارد. برای تمدید، همان دو فایل را دوباره بفرستید.")
-            except Exception as exc:
-                st.error(f"تکثیر ناموفق بود: {exc}")
-
-with st.expander("مدیریت صداهای ذخیره‌شده", expanded=False):
-    st.caption("لیست، sample_audio را برنمی‌گرداند. پیش‌نمایش با voices.get و حذف با voices.delete است.")
-    manage_id = st.text_input("شناسه voice_", key="manage_voice_id", placeholder="voice_...")
-    g1, g2, g3 = st.columns(3)
-    if g1.button("پیش‌نمایش", key="manage_get", use_container_width=True):
-        if not manage_id.strip():
-            st.error("شناسه را وارد کنید.")
-        else:
-            try:
-                info = client.voices.get(id=manage_id.strip())
-                sample = voice_sample_wav(info)
-                name = getattr(info, "display_name", "") or manage_id.strip()
-                st.session_state.managed_preview = {"id": manage_id.strip(), "name": name, "sample": sample}
-            except Exception as exc:
-                st.error(f"دریافت صدا ناموفق بود: {exc}")
-    if g2.button("استفاده در گفتار", key="manage_use", use_container_width=True):
-        if manage_id.strip():
-            remember_voice(manage_id.strip())
-            st.rerun()
-    confirm_delete = g3.checkbox("حذف", key="manage_confirm_delete")
-    if confirm_delete and st.button("حذف دائمی این صدا", key="manage_delete"):
-        if not manage_id.strip():
-            st.error("شناسه را وارد کنید.")
-        else:
-            try:
-                client.voices.delete(id=manage_id.strip())
-                st.session_state.created_voices = [
-                    v for v in st.session_state.created_voices if v.get("id") != manage_id.strip()
-                ]
-                st.success("حذف شد.")
-            except Exception as exc:
-                st.error(f"حذف ناموفق بود: {exc}")
-    preview = st.session_state.get("managed_preview")
-    if preview and preview.get("sample"):
-        st.caption(preview.get("name") or preview.get("id"))
-        st.audio(preview["sample"], format="audio/wav")
-
-with st.expander("📚 کتابخانه صدای گسترده", expanded=False):
-    st.caption("client.voices.list — فیلترها با AND و مقدارهای هر فیلتر با OR ترکیب می‌شوند.")
-    f1, f2, f3, f4 = st.columns(4)
-    with f1:
-        lib_search = st.text_input("جستجو", key="lib_search")
-    with f2:
-        lib_lang = st.text_input("زبان", value="fa-IR", key="lib_lang")
-    with f3:
-        lib_gender = st.selectbox("جنسیت", ["—", "female", "male", "neutral"], key="lib_gender")
-    with f4:
-        lib_type = st.selectbox("نوع", ["prebuilt", "prompted", "replicated"], key="lib_type")
-    f5, f6 = st.columns(2)
-    with f5:
-        lib_pitch = st.selectbox("زیروبم", ["—", "low", "medium", "high"], key="lib_pitch")
-    with f6:
-        lib_context = st.selectbox(
-            "کاربرد",
-            ["—", "Conversational", "Audiobook", "News"],
-            key="lib_context",
-        )
-    if st.button("جستجو", key="lib_search_btn"):
-        try:
-            kwargs = {"page_size": 30, "type_": [lib_type]}
-            if lib_search.strip():
-                kwargs["search"] = lib_search.strip()
-            if lib_lang.strip():
-                kwargs["language_code"] = [lib_lang.strip()]
-            if lib_gender != "—":
-                kwargs["gender"] = [lib_gender]
-            if lib_pitch != "—":
-                kwargs["pitch"] = [lib_pitch]
-            if lib_context != "—":
-                kwargs["contexts"] = [lib_context]
-            page = client.voices.list(**kwargs)
-            rows = []
-            for voice in page.voices or []:
-                rows.append({
-                    "id": getattr(voice, "id", "") or "",
-                    "name": getattr(voice, "display_name", "") or "",
-                    "language": getattr(voice, "language_code", "") or "",
-                    "accent": getattr(voice, "accent", "") or "",
-                    "gender": getattr(voice, "gender", "") or "",
-                    "pitch": getattr(voice, "pitch", "") or "",
-                })
-            st.session_state.library_rows = rows
-            st.session_state.library_page_token = getattr(page, "next_page_token", "") or ""
-        except Exception as exc:
-            st.error(f"جستجو ناموفق بود: {exc}")
-    rows = st.session_state.library_rows
-    if rows:
-        labels = [f"{r['id']} — {r['name']} ({r['language']}, {r['gender']})" for r in rows]
-        pick = st.selectbox("نتیجه", labels, key="lib_pick")
-        picked_id = rows[labels.index(pick)]["id"]
-        st.caption(picked_id)
-        if st.button("گذاشتن این شناسه در فیلد صدای سفارشی", key="use_library_voice"):
-            remember_voice(picked_id)
-            st.rerun()
-        if st.session_state.library_page_token:
-            st.caption("نتیجه بیشتر از یک صفحه است. page_size روی ۳۰ صدا است؛ جستجو را دقیق‌تر کنید.")
-
-if st.session_state.pending_voice_id:
-    vid = st.session_state.pending_voice_id
-    st.session_state.single_voice_source = "سفارشی (voice_... / voicekey_...)"
-    st.session_state.single_custom_voice = vid
-    st.session_state.voice1_source = "سفارشی"
-    st.session_state.custom_voice_1 = vid
-    st.session_state.pending_voice_id = ""
-
-# ----------------------------- Generation config -----------------------------
-
-st.header("تنظیمات تولید")
-c1, c2, c3 = st.columns(3)
-with c1:
-    mode = st.radio("حالت", ["تک‌بلندگو", "چندبلندگو"], horizontal=True)
-with c2:
-    model = st.selectbox(
-        "مدل",
-        MODELS,
-        index=0,
-        help="lite: حجم بالا و تأخیر کم. flash: وفاداری استودیویی، دیالوگ چندگوینده و لهجه. طرح درخواست هر دو یکی است.",
-    )
-    if model.endswith("lite-tts"):
-        st.caption("lite برای تولید روزمره و تک‌گویی است. دیالوگ سنگین را با flash امتحان کنید.")
-with c3:
-    streaming = st.checkbox("استریمینگ", value=False, help="تکه‌های PCM خام تا پایان جمع می‌شوند و یک WAV ساخته می‌شود.")
-
-mime_label = st.selectbox("فرمت API در حالت غیر استریم", list(MIME_TYPES), disabled=streaming)
-mime_type = MIME_TYPES[mime_label]
-sample_rate = st.selectbox(
-    "نرخ نمونه",
-    SAMPLE_RATES,
-    index=0,
-    format_func=lambda r: f"{r:,} Hz",
-    help="۲۴۰۰۰ پیش‌فرض سند است. در استریم، نرخ غیر از ۲۴۰۰۰ با mime_type برابر audio/l16 فرستاده می‌شود.",
-)
-if mime_type in ("audio/mulaw", "audio/alaw") and sample_rate != 8000:
-    st.caption("برای تلفن، mu-law و A-law معمولاً ۸۰۰۰ هرتز هستند.")
-
-# ----------------------------- Transcript -----------------------------
-
-with st.expander("تولید خودکار متن", expanded=False):
-    g1, g2, g3 = st.columns(3)
-    with g1:
-        topic = st.text_input("موضوع", "تکنولوژی و هوش مصنوعی")
-    with g2:
-        transcript_style = st.selectbox("سبک متن", ["پادکست", "مصاحبه", "گفت‌وگوی دوستانه", "بحث علمی", "داستان"])
-    with g3:
-        language = st.selectbox("زبان", ["فارسی", "بلوچی", "تشخیص خودکار"])
-    word_count = st.slider("حدود کلمه", 50, 500, 150, step=25)
-    if st.button("نوشتن با Gemini", use_container_width=True):
-        try:
-            with st.spinner("در حال نوشتن..."):
-                spk1_name = st.session_state.get("speaker_name_1", "مرد")
-                spk2_name = st.session_state.get("speaker_name_2", "زن")
-                if language == "تشخیص خودکار":
-                    lang_instruction = "اگر موضوع بلوچی است بلوچی بنویس، وگرنه فارسی روان."
-                else:
-                    lang_instruction = f"متن دقیقاً به زبان {language} باشد."
-                if mode == "تک‌بلندگو":
-                    prompt = (
-                        f"یک متن گفتاری حدود {word_count} کلمه بنویس. {lang_instruction} "
-                        f"سبک {transcript_style}، درباره «{topic}». "
-                        "فقط خود گفتار را برگردان. نام گوینده، عنوان و توضیح صحنه ننویس."
-                    )
-                else:
-                    prompt = (
-                        f"یک گفت‌وگو حدود {word_count} کلمه بنویس. {lang_instruction} "
-                        f"سبک {transcript_style}، درباره «{topic}». "
-                        f"فقط خطوط «{spk1_name}: متن» و «{spk2_name}: متن». توضیح اضافه ننویس."
-                    )
-                response = generate_text_with_retry(client, model="gemini-2.5-flash", prompt=prompt)
-                st.session_state.generated_transcript = response.text or ""
-                st.session_state.generated_preview = st.session_state.generated_transcript
-            st.success("متن آماده شد.")
-        except Exception as exc:
-            st.error(f"تولید متن ناموفق بود: {exc}")
-    if st.session_state.generated_transcript:
-        st.text_area("متن تولیدشده", key="generated_preview", height=120)
-        if st.button("بردن به ویرایشگر"):
-            target = "single_text_value" if mode == "تک‌بلندگو" else "multi_text_value"
-            st.session_state[target] = st.session_state.generated_transcript
-            st.rerun()
-
-# ----------------------------- Speakers and text -----------------------------
-
-speaker1, speaker2 = "مرد", "زن"
-voice1, voice2, style1, style2 = "Kore", "Aoede", "", ""
-selected_voice, style_single = "Kore", ""
-conversational = False
-
-def style_picker(label, key_prefix):
-    choice = st.selectbox(label, list(PREDEFINED_STYLES.keys()), key=f"{key_prefix}_choice")
-    if choice == "سفارشی (Custom)":
-        return st.text_input("سبک انگلیسی", placeholder="warm and enthusiastic", key=f"{key_prefix}_custom")
-    return PREDEFINED_STYLES[choice]
-
-if mode == "تک‌بلندگو":
-    voice_source = st.radio(
-        "منبع صدا",
-        ["پیش‌ساخته", "سفارشی (voice_... / voicekey_...)"],
-        horizontal=True,
-        key="single_voice_source",
-    )
-    v1, v2 = st.columns(2)
-    with v1:
-        if voice_source == "پیش‌ساخته":
-            selected_voice = st.selectbox(
-                "صدا",
-                ALL_VOICES,
-                index=ALL_VOICES.index("Kore"),
-                format_func=lambda v: f"{v} — {VOICE_DESCRIPTIONS.get(v, '')}",
-                key="single_prebuilt_voice",
+with tab_tts:
+    st.subheader("تبدیل متن به گفتار")
+    mode = st.radio("حالت تولید", ["تک‌گوینده", "دوگوینده"], horizontal=True)
+    if mode == "تک‌گوینده":
+        left, right = st.columns([2, 1])
+        with left:
+            single_text = st.text_area(
+                "متن برای خواندن",
+                height=270,
+                placeholder="متن را دقیقاً همان‌طور که باید خوانده شود وارد کنید…\nتگ‌های لحظه‌ای مثل <short pause> و <sigh> را می‌توانید داخل متن بگذارید.",
+                key="single_text",
             )
-        else:
-            selected_voice = st.text_input(
-                "شناسه صدا",
-                placeholder="voice_... یا voicekey_... یا نام کتابخانه",
-                key="single_custom_voice",
-            ).strip()
-    with v2:
-        style_single = style_picker("سبک بیان", "single_style")
-    text_input = st.text_area("متن", key="single_text_value", height=220, placeholder="متن را اینجا بنویسید. نام گوینده نگذارید.")
-else:
-    v1, v2 = st.columns(2)
-    with v1:
-        speaker1 = st.text_input("نام گوینده ۱", "مرد", key="speaker_name_1")
-        voice1_source = st.radio("منبع صدای ۱", ["پیش‌ساخته", "سفارشی"], horizontal=True, key="voice1_source")
-        if voice1_source == "پیش‌ساخته":
-            voice1 = st.selectbox(
-                "صدای ۱", ALL_VOICES, index=ALL_VOICES.index("Kore"),
-                format_func=lambda v: f"{v} — {VOICE_DESCRIPTIONS.get(v, '')}", key="voice_1",
+            single_style = st.text_input(
+                "راهنمای لحن و اجرا (اختیاری)",
+                placeholder="مثلاً: warm, clear, cheerful, slow and expressive",
+                key="single_style",
             )
-        else:
-            voice1 = st.text_input("شناسه صدای ۱", placeholder="voice_...", key="custom_voice_1").strip()
-        style1 = style_picker("سبک ۱", "style_1")
-    with v2:
-        speaker2 = st.text_input("نام گوینده ۲", "زن", key="speaker_name_2")
-        voice2_source = st.radio("منبع صدای ۲", ["پیش‌ساخته", "سفارشی"], horizontal=True, key="voice2_source")
-        if voice2_source == "پیش‌ساخته":
-            voice2 = st.selectbox(
-                "صدای ۲", ALL_VOICES, index=ALL_VOICES.index("Aoede"),
-                format_func=lambda v: f"{v} — {VOICE_DESCRIPTIONS.get(v, '')}", key="voice_2",
-            )
-        else:
-            voice2 = st.text_input("شناسه صدای ۲", placeholder="voice_...", key="custom_voice_2").strip()
-        style2 = style_picker("سبک ۲", "style_2")
-    if not speaker1.strip() or not speaker2.strip() or speaker1.strip() == speaker2.strip():
-        st.warning("نام دو گوینده باید پر و متفاوت باشد. نام‌ها خوانده نمی‌شوند.")
-    split_needed = is_custom_voice(voice1) or is_custom_voice(voice2)
-    if split_needed:
-        st.info("حداقل یک صدا سفارشی است. نوبت‌ها جدا با audio/l16 ساخته و به یک WAV وصل می‌شوند.")
+        with right:
+            voice_a = st.selectbox("صدای گوینده", PREBUILT_VOICES, index=3, key="single_voice")
+            custom_voice_a = st.text_input("یا شناسهٔ صدای سفارشی", placeholder="voice_... یا voicekey_...", key="single_custom_voice")
+            if custom_voice_a.strip():
+                voice_a = custom_voice_a.strip()
+            st.caption("متن بدون پاک‌سازی خودکار ارسال می‌شود؛ کلمات، شعر و تگ‌های شما دست‌کاری نمی‌شوند.")
+        voice_b = ""
+        speaker_a, speaker_b = "Speaker A", "Speaker B"
+        style_a, style_b = "", ""
+        tts_text = single_text
     else:
-        conversational = st.checkbox(
-            "افزودن mode: conversational",
-            value=False,
-            help="نمونه رسمی پایتون فقط speakers را می‌فرستد. این گزینه فیلد REST را هم اضافه می‌کند.",
+        c1, c2 = st.columns(2)
+        with c1:
+            speaker_a = st.text_input("نام گویندهٔ اول", value="مرد", key="speaker_a")
+            voice_a = st.selectbox("صدای گویندهٔ اول", PREBUILT_VOICES, index=1, key="multi_voice_a")
+            custom_voice_a = st.text_input("شناسهٔ سفارشی گویندهٔ اول (اختیاری)", key="multi_custom_a", placeholder="voice_... / voicekey_...")
+            if custom_voice_a.strip():
+                voice_a = custom_voice_a.strip()
+            style_a = st.text_input("لحن گویندهٔ اول", placeholder="مثلاً: calm and warm", key="style_a")
+        with c2:
+            speaker_b = st.text_input("نام گویندهٔ دوم", value="زن", key="speaker_b")
+            voice_b = st.selectbox("صدای گویندهٔ دوم", PREBUILT_VOICES, index=3, key="multi_voice_b")
+            custom_voice_b = st.text_input("شناسهٔ سفارشی گویندهٔ دوم (اختیاری)", key="multi_custom_b", placeholder="voice_... / voicekey_...")
+            if custom_voice_b.strip():
+                voice_b = custom_voice_b.strip()
+            style_b = st.text_input("لحن گویندهٔ دوم", placeholder="مثلاً: bright and expressive", key="style_b")
+        st.info(f"هر نوبت را در یک خط با قالب «{speaker_a}: متن» یا «{speaker_b}: متن» بنویسید. خطوط بدون برچسب به گویندهٔ اول اختصاص می‌یابند.")
+        tts_text = st.text_area(
+            "متن گفت‌وگو",
+            height=270,
+            placeholder=f"{speaker_a}: سلام، حالت چطوره؟\n{speaker_b}: ممنون، خوبم. تو چطوری؟",
+            key="multi_text",
         )
-    with st.expander("قالب‌بندی شعر و دیالوگ", expanded=False):
-        raw = st.text_area("متن خام", height=140, key="raw_multi")
-        strategy_label = st.selectbox(
-            "روش",
-            ["تشخیص خودکار", "خط به خط", "بیت به بیت (هر دو خط)", "بند به بند", "خط تیره", "تعداد خط در هر نوبت", "نگاشت نام گوینده", "جداکننده سفارشی"],
-        )
-        sep, mapping, n_lines = "---", f"{speaker1}=1, {speaker2}=2", 2
-        if strategy_label == "جداکننده سفارشی":
-            sep = st.text_input("جداکننده", "---")
-        if strategy_label == "نگاشت نام گوینده":
-            mapping = st.text_input("نگاشت", mapping)
-        if strategy_label == "تعداد خط در هر نوبت":
-            n_lines = st.number_input("تعداد خط", min_value=1, max_value=20, value=2)
-        if st.button("پیش‌نمایش", use_container_width=True):
-            strategies = {
-                "تشخیص خودکار": detect_strategy(raw),
-                "خط به خط": "line",
-                "بیت به بیت (هر دو خط)": "couplet",
-                "بند به بند": "stanza",
-                "خط تیره": "dash",
-                "تعداد خط در هر نوبت": "n_lines",
-                "نگاشت نام گوینده": "mapping",
-                "جداکننده سفارشی": "separator",
+        voice_style = ""
+
+    st.divider()
+    cfmt, crate, cstream = st.columns([1.3, 1, 1])
+    with cfmt:
+        output_label = st.selectbox("فرمت خروجی", list(AUDIO_MIME.keys()), index=0)
+        output_mime = AUDIO_MIME[output_label]
+    with crate:
+        sample_rate = st.selectbox("نرخ نمونه‌برداری برای فرمت خام", [24000, 16000, 8000], index=0)
+    with cstream:
+        use_stream = st.checkbox("تولید استریم‌شده", value=False, help="استریم به PCM خام 24kHz مونو می‌آید و در پایان به WAV تبدیل می‌شود.")
+    if use_stream and output_mime != "audio/wav":
+        st.caption("در حالت استریم، دریافت اولیه PCM است؛ برنامه در پایان آن را به فرمت انتخاب‌شده تبدیل می‌کند.")
+
+    if st.button("🎧 تولید صدا", type="primary", use_container_width=True, key="generate_tts"):
+        if not tts_text.strip():
+            st.error("ابتدا متن را وارد کنید.")
+        elif mode == "دوگوینده" and (not speaker_a.strip() or not speaker_b.strip() or speaker_a.strip() == speaker_b.strip()):
+            st.error("نام دو گوینده باید خالی نباشد و با هم تفاوت داشته باشد.")
+        else:
+            try:
+                client = obtain_client()
+                progress_slot = st.empty()
+                progress_bar = st.progress(0)
+                def update_progress(done, total):
+                    progress_bar.progress(min(1.0, done / max(total, 1)))
+                    progress_slot.caption(f"در حال تولید قطعهٔ {done} از {total}…")
+                with st.spinner("در حال تولید صدا با Gemini…"):
+                    raw_audio, playable_wav, ext = synthesize(
+                        client=client,
+                        model=selected_model,
+                        text=tts_text,
+                        mode=mode,
+                        style=single_style if mode == "تک‌گوینده" else "",
+                        voice_a=voice_a,
+                        voice_b=voice_b,
+                        speaker_a=speaker_a,
+                        speaker_b=speaker_b,
+                        style_a=style_a,
+                        style_b=style_b,
+                        mime_type=output_mime,
+                        sample_rate=sample_rate,
+                        use_stream=use_stream,
+                        progress_callback=update_progress,
+                    )
+                st.session_state.last_audio_raw = raw_audio
+                st.session_state.last_audio_wav = playable_wav
+                st.session_state.last_audio_ext = ext
+                st.session_state.last_audio_mime = output_mime
+                meta = wav_metadata(playable_wav)
+                st.success(f"تولید انجام شد. مدت تقریبی: {meta['duration']:.1f} ثانیه | نرخ نمونه‌برداری: {meta['sample_rate']}Hz")
+            except Exception as exc:
+                st.error("تولید صدا ناموفق بود.")
+                st.code(safe_error(exc))
+
+    if st.session_state.last_audio_wav:
+        st.divider()
+        st.subheader("خروجی آماده")
+        st.audio(st.session_state.last_audio_wav, format="audio/wav")
+        d1, d2 = st.columns(2)
+        with d1:
+            st.download_button(
+                "دانلود WAV قابل پخش",
+                data=st.session_state.last_audio_wav,
+                file_name="gemini_tts_output.wav",
+                mime="audio/wav",
+                use_container_width=True,
+            )
+        with d2:
+            ext = st.session_state.last_audio_ext
+            raw_mime = st.session_state.last_audio_mime
+            st.download_button(
+                f"دانلود خروجی اصلی ({ext})",
+                data=st.session_state.last_audio_raw or st.session_state.last_audio_wav,
+                file_name=f"gemini_tts_output.{ext}",
+                mime=raw_mime,
+                use_container_width=True,
+            )
+        with st.expander("ارسال به تلگرام"):
+            telegram_mode = st.radio("نوع ارسال", ["ارسال به‌صورت فایل (مناسب WAV)", "ارسال به‌صورت Audio"], horizontal=True)
+            if st.button("ارسال به تلگرام", key="send_telegram"):
+                try:
+                    result = telegram_send(
+                        tg_token,
+                        tg_chat_id,
+                        st.session_state.last_audio_wav,
+                        "gemini_tts_output.wav",
+                        as_audio=telegram_mode == "ارسال به‌صورت Audio",
+                    )
+                    st.success("فایل با موفقیت به تلگرام ارسال شد.")
+                except Exception as exc:
+                    st.error("ارسال تلگرام ناموفق بود.")
+                    st.code(safe_error(exc))
+
+with tab_text:
+    st.subheader("تولید یا آماده‌سازی متن با Gemini")
+    text_task = st.selectbox("نوع کار", [
+        "تولید متن برای گویندگی", "تبدیل متن به گفت‌وگوی دو نفره", "بازنویسی روان بدون تغییر معنا", "تقسیم متن به بخش‌های مناسب گویندگی"
+    ])
+    text_prompt = st.text_area("موضوع یا متن ورودی", height=220, key="text_prompt")
+    extra_instruction = st.text_input("دستور تکمیلی (اختیاری)", placeholder="مثلاً: فارسی روان، لحن رسمی، حفظ نام‌ها")
+    if st.button("ساخت متن", type="primary", key="make_text"):
+        if not text_prompt.strip():
+            st.error("ورودی خالی است.")
+        else:
+            prompts = {
+                "تولید متن برای گویندگی": "Write a natural spoken script based on the following request. Output only the script, no intro or commentary.\n\n",
+                "تبدیل متن به گفت‌وگوی دو نفره": "Convert the following material into a natural two-person dialogue. Label every turn exactly 'گوینده اول:' or 'گوینده دوم:'. Preserve facts and do not invent details. Output only the dialogue.\n\n",
+                "بازنویسی روان بدون تغییر معنا": "Rewrite the following text to be clear and natural when spoken aloud. Preserve meaning, names, facts, and important wording. Do not summarize or add facts. Output only the revised text.\n\n",
+                "تقسیم متن به بخش‌های مناسب گویندگی": "Divide the following text into logical narration sections. Preserve the wording verbatim; add only section separators and concise headings in square brackets.\n\n",
             }
-            st.session_state.formatted_preview = format_multispeaker(
-                raw, strategies[strategy_label], speaker1, speaker2, sep, mapping, n_lines
-            )
-        if st.session_state.formatted_preview:
-            st.code(st.session_state.formatted_preview, language=None)
-            if st.button("اعمال در متن نهایی", type="primary"):
-                st.session_state.multi_text_value = st.session_state.formatted_preview
-                st.rerun()
-    text_input = st.text_area(
-        "متن نهایی",
-        key="multi_text_value",
-        height=260,
-        placeholder=f"{speaker1}: سلام\n{speaker2}: سلام",
-        help="نام قبل از دونقطه فقط برچسب است و داخل text API نمی‌رود.",
+            prompt = prompts[text_task] + text_prompt.strip()
+            if extra_instruction.strip():
+                prompt += "\n\nAdditional instruction: " + extra_instruction.strip()
+            try:
+                with st.spinner("در حال آماده‌سازی متن…"):
+                    output = generate_text(obtain_client(), prompt)
+                st.session_state.generated_text = output
+            except Exception as exc:
+                st.error("تولید متن ناموفق بود.")
+                st.code(safe_error(exc))
+    if st.session_state.generated_text:
+        st.text_area("متن تولیدشده", value=st.session_state.generated_text, height=260, key="generated_text_view")
+        st.button("انتقال متن به ورودی گفتار", key="transfer_to_tts", on_click=_copy_generated_to_tts)
+        if st.session_state.get("transfer_notice"):
+            st.success(st.session_state.pop("transfer_notice"))
+
+with tab_voices:
+    st.subheader("ساخت، بازترکیب و مدیریت صدا")
+    voice_tabs = st.tabs(["طراحی صدا", "بازترکیب صدا", "تکثیر صدا", "کتابخانه و مدیریت"])
+
+    with voice_tabs[0]:
+        st.markdown("یک شخصیت صوتی تازه را با توصیف طبیعی بسازید. توصیف سن، جنسیت، بافت صدا، لهجه و ویژگی‌های پایدار را همین‌جا بنویسید؛ سبک اجرای هر متن را در بخش TTS تنظیم کنید.")
+        design_name = st.text_input("نام صدا", value="صدای سفارشی", key="design_name")
+        design_prompt = st.text_area(
+            "توصیف صدا",
+            height=140,
+            placeholder="A mature female narrator with a clear, warm timbre, measured pacing, and a gentle natural accent.",
+            key="design_prompt",
+        )
+        gd1, gd2 = st.columns(2)
+        with gd1:
+            design_gender = st.selectbox("جنسیت صوتی", ["unspecified", "female", "male"], index=0)
+        with gd2:
+            design_language = st.text_input("کد زبان (اختیاری)", value="fa-IR", help="مثلاً fa-IR، en-US، ar-XA")
+        if st.button("ساخت صدای جدید", type="primary", key="create_design"):
+            if not design_prompt.strip():
+                st.error("توصیف صدا را وارد کنید.")
+            else:
+                try:
+                    with st.spinner("در حال طراحی صدا…"):
+                        created = create_designed_voice(obtain_client(), selected_model, design_name, design_prompt, design_gender, design_language)
+                    voice_id = obj_get(created, "id", "") or ""
+                    st.session_state.last_voice_id = voice_id
+                    st.success(f"صدا ساخته شد: {voice_id}")
+                    preview = sample_audio_bytes(created)
+                    if preview:
+                        st.audio(preview, format="audio/wav")
+                        st.download_button("دانلود نمونهٔ صدای طراحی‌شده", preview, file_name="voice_design_preview.wav", mime="audio/wav")
+                except Exception as exc:
+                    st.error("طراحی صدا ناموفق بود.")
+                    st.code(safe_error(exc))
+
+    with voice_tabs[1]:
+        st.markdown("یک صدای آماده، صدای کتابخانه یا شناسهٔ صدای سفارشی را انتخاب کنید و تغییرات نسبی را توصیف کنید. خروجی، صدای جدیدی است و صدای پایه دست‌نخورده می‌ماند.")
+        remix_base_type = st.radio("منبع صدای پایه", ["صدای پیش‌ساخته", "شناسهٔ صدا"], horizontal=True, key="remix_base_type")
+        if remix_base_type == "صدای پیش‌ساخته":
+            remix_base = st.selectbox("صدای پایه", PREBUILT_VOICES, index=1, key="remix_prebuilt")
+        else:
+            remix_base = st.text_input("شناسهٔ صدای پایه", placeholder="voice_...", key="remix_custom_base")
+        remix_name = st.text_input("نام صدای جدید", value="نسخهٔ بازترکیب‌شده", key="remix_name")
+        remix_prompt = st.text_area("تغییرات موردنظر", height=120, placeholder="Soften the delivery, slightly lower the pitch, and add a subtle regional accent.", key="remix_prompt")
+        if st.button("بازترکیب و ساخت صدا", type="primary", key="do_remix"):
+            if not remix_base.strip() or not remix_prompt.strip():
+                st.error("صدای پایه و توضیح تغییرات هر دو لازم‌اند.")
+            else:
+                try:
+                    with st.spinner("در حال بازترکیب صدا…"):
+                        created = create_remixed_voice(obtain_client(), remix_base, remix_prompt, remix_name)
+                    voice_id = obj_get(created, "id", "") or ""
+                    st.session_state.last_voice_id = voice_id
+                    st.success(f"صدای مستقل جدید ساخته شد: {voice_id}")
+                    preview = sample_audio_bytes(created)
+                    if preview:
+                        st.audio(preview, format="audio/wav")
+                        st.download_button("دانلود نمونهٔ صدای بازترکیب‌شده", preview, file_name="voice_remix_preview.wav", mime="audio/wav")
+                except Exception as exc:
+                    st.error("بازترکیب صدا ناموفق بود.")
+                    st.code(safe_error(exc))
+
+    with voice_tabs[2]:
+        st.warning("فقط صدای خودتان یا صدایی را تکثیر کنید که مجوز روشن و معتبر برای استفاده از آن دارید. فایل رضایت باید از همان گوینده باشد و متن رضایت را دقیقاً بخواند.")
+        consent_language = st.selectbox("زبان متن رضایت", list(CONSENT_TEXTS.keys()), key="consent_language")
+        st.code(CONSENT_TEXTS[consent_language])
+        st.caption("فایل مرجع: ۱۰ تا ۳۰ ثانیه گفتار طبیعی. هر دو فایل باید WAV مونو، PCM 16-bit و 24kHz باشند.")
+        source_upload = st.file_uploader("فایل صوتی مرجع گوینده", type=["wav"], key="source_upload")
+        consent_upload = st.file_uploader("فایل ضبط‌شدهٔ رضایت همان گوینده", type=["wav"], key="consent_upload")
+        rep_name = st.text_input("نام صدای تکثیرشده", value="صدای تکثیرشده", key="rep_name")
+        rep_store = st.checkbox("ذخیرهٔ پایدار در پروژه (voice_...)", value=True, help="در حالت غیرفعال، API یک کلید voicekey_... با عمر محدود می‌دهد.")
+        consent_confirm = st.checkbox("تأیید می‌کنم مجوز لازم برای این صدا را دارم و گوینده متن رضایت را آگاهانه ضبط کرده است.")
+        if st.button("ایجاد صدای تکثیرشده", type="primary", key="create_replica"):
+            if not source_upload or not consent_upload:
+                st.error("هر دو فایل مرجع و رضایت لازم هستند.")
+            elif not consent_confirm:
+                st.error("ابتدا تأیید رضایت و حق استفاده را فعال کنید.")
+            else:
+                try:
+                    with st.spinner("در حال اعتبارسنجی فایل‌ها و ایجاد صدای تکثیرشده…"):
+                        created = create_replicated_voice(
+                            obtain_client(), selected_model, rep_name,
+                            source_upload.getvalue(), consent_upload.getvalue(), rep_store,
+                        )
+                    voice_id = obj_get(created, "id", "") or ""
+                    voice_key_value = obj_get(created, "key", "") or ""
+                    if rep_store and voice_id:
+                        st.session_state.last_voice_id = voice_id
+                        st.success(f"صدای تکثیرشده ذخیره شد: {voice_id}")
+                    elif voice_key_value:
+                        st.session_state.voice_key = voice_key_value
+                        st.success("کلید صدای تکثیرشده ساخته شد. آن را در جای امن نگه دارید؛ زمان‌دار است.")
+                        st.code(voice_key_value)
+                    else:
+                        st.warning("در پاسخ API شناسه یا کلید صدا پیدا نشد.")
+                except Exception as exc:
+                    st.error("تکثیر صدا ناموفق بود.")
+                    st.code(safe_error(exc))
+
+    with voice_tabs[3]:
+        st.markdown("صداهای ذخیره‌شدهٔ پروژه را فهرست، جست‌وجو، دریافت یا حذف کنید. فهرست API صفحه‌بندی می‌شود.")
+        filter_types = st.multiselect("نوع صدا", ["prompted", "replicated", "prebuilt"], default=["prompted", "replicated"])
+        library_search = st.text_input("جست‌وجو در صداها", key="library_search")
+        if st.button("بارگذاری کتابخانهٔ صدا", key="load_voice_library"):
+            try:
+                with st.spinner("در حال دریافت کتابخانه…"):
+                    voices = list_voices(obtain_client(), filter_types or ["prompted", "replicated"], library_search)
+                st.session_state.voice_library_rows = voices
+                st.success(f"{len(voices)} صدا دریافت شد.")
+            except Exception as exc:
+                st.error("دریافت کتابخانه ناموفق بود.")
+                st.code(safe_error(exc))
+        voice_rows = st.session_state.get("voice_library_rows", [])
+        if voice_rows:
+            options = {}
+            for v in voice_rows:
+                vid = voice_field(v, "id", "") or voice_field(v, "key", "")
+                title = voice_field(v, "display_name", "بدون نام")
+                vtype = voice_field(v, "type", "نامشخص")
+                if vid:
+                    options[f"{title} | {vtype} | {vid}"] = vid
+            if options:
+                selected_voice_label = st.selectbox("صدای موردنظر", list(options.keys()), key="selected_library_voice")
+                selected_voice_id = options[selected_voice_label]
+                st.session_state.selected_library_voice_id = selected_voice_id
+                a, b, c = st.columns(3)
+                with a:
+                    if st.button("دریافت جزئیات", key="get_voice_details"):
+                        try:
+                            details = obtain_client().voices.get(id=selected_voice_id)
+                            st.json({
+                                "id": obj_get(details, "id"),
+                                "display_name": obj_get(details, "display_name"),
+                                "type": obj_get(details, "type"),
+                                "gender": obj_get(details, "gender"),
+                                "language_code": obj_get(details, "language_code"),
+                            })
+                            sample = sample_audio_bytes(details)
+                            if sample:
+                                st.audio(sample, format="audio/wav")
+                        except Exception as exc:
+                            st.error(safe_error(exc))
+                with b:
+                    st.button("استفاده در تولید گفتار", key="use_library_voice", on_click=_use_selected_voice)
+                    if st.session_state.get("voice_use_notice"):
+                        st.success(st.session_state.pop("voice_use_notice"))
+                with c:
+                    confirm_delete = st.checkbox("حذف را تأیید می‌کنم", key="confirm_voice_delete")
+                    if st.button("حذف صدای ذخیره‌شده", disabled=not confirm_delete, key="delete_library_voice"):
+                        try:
+                            obtain_client().voices.delete(id=selected_voice_id)
+                            st.success("درخواست حذف به API ارسال شد.")
+                            st.session_state.voice_library_rows = []
+                        except Exception as exc:
+                            st.error(safe_error(exc))
+        if st.session_state.last_voice_id:
+            st.caption("آخرین شناسهٔ صدای ساخته‌شده/انتخاب‌شده:")
+            st.code(st.session_state.last_voice_id)
+        if st.session_state.voice_key:
+            st.caption("کلید stateless صدای تکثیرشده:")
+            st.code(st.session_state.voice_key)
+
+with tab_transcribe:
+    st.subheader("تبدیل فایل صوتی به متن")
+    audio_file = st.file_uploader("فایل صوتی", type=["wav", "mp3", "m4a", "flac", "ogg", "aac", "webm"], key="transcribe_upload")
+    language_hint = st.text_input("زبان احتمالی (اختیاری)", placeholder="مثلاً Persian, Balochi, English")
+    if st.button("رونویسی دقیق", type="primary", key="do_transcribe"):
+        if not audio_file:
+            st.error("یک فایل صوتی انتخاب کنید.")
+        else:
+            try:
+                mime = audio_file.type or "audio/wav"
+                with st.spinner("در حال شنیدن و رونویسی با Gemini…"):
+                    transcript = transcribe_audio(obtain_client(), audio_file.getvalue(), mime, language_hint)
+                st.session_state.transcribed_text = transcript
+            except Exception as exc:
+                st.error("رونویسی ناموفق بود.")
+                st.code(safe_error(exc))
+    if st.session_state.get("transcribed_text"):
+        transcript_value = st.text_area("متن استخراج‌شده", value=st.session_state.transcribed_text, height=260, key="transcript_result")
+        st.button("انتقال رونویسی به ورودی تک‌گوینده", key="transcript_to_tts", on_click=_copy_transcript_to_tts)
+        if st.session_state.get("transcript_transfer_notice"):
+            st.success(st.session_state.pop("transcript_transfer_notice"))
+
+with tab_help:
+    st.subheader("راهنمای اجرا")
+    st.markdown(
+        """
+        **نصب در محیط پایتون یا Termux**
+        ```bash
+        python -m pip install -U "google-genai>=2.25.0" "streamlit>=1.42.0" requests
+        ```
+        **اجرا**
+        ```bash
+        streamlit run gemini_tts_studio_pro.py
+        ```
+        **تنظیم کلیدها در Streamlit Secrets**
+        ```toml
+        GEMINI_API_KEY = "YOUR_GEMINI_API_KEY"
+        TELEGRAM_BOT_TOKEN = "YOUR_TELEGRAM_BOT_TOKEN"
+        TELEGRAM_CHAT_ID = "YOUR_CHAT_ID"
+        ```
+        **فرمت گفت‌وگوی دوگوینده**
+        ```text
+        مرد: سلام، حالت چطوره؟
+        زن: ممنون، خوبم. تو چطوری؟
+        ```
+        **نکات مهم فنی**
+        - برای Gemini 3.8 TTS، راهنمای لحن پایدار هر نوبت در `speech_metadata.style` ارسال می‌شود؛ تگ‌های کوتاه مثل `<laugh>`، `<sigh>` و `<short pause>` داخل متن باقی می‌مانند.
+        - برنامه متن شما را به‌صورت خودکار سانسور، ترجمه یا اصلاح نمی‌کند.
+        - متن بلند به قطعات کوچک‌تر تقسیم می‌شود. برش بر اساس تعداد نویسه محافظه‌کارانه است و جایگزین شمارش دقیق توکن API نیست.
+        - در حالت استریم، خروجی PCM خام 24kHz مونو دریافت و در انتها به WAV تبدیل می‌شود.
+        - تنظیمات سفارشی `safety_settings` در Interactions API پشتیبانی نمی‌شود؛ برنامه چنین پارامتری را به درخواست TTS اضافه نمی‌کند.
+        - تکثیر صدا فقط با فایل مرجع و رضایت همان گوینده انجام شود. برنامه فرمت WAV را بررسی می‌کند؛ اعتبار رضایت را خود سرویس Google ارزیابی می‌کند.
+        - شناسه‌های `voice_...` ذخیره‌شده در پروژه مدیریت می‌شوند؛ کلیدهای `voicekey_...` را محرمانه نگه دارید و به‌دلیل زمان‌دار بودن، برای استفادهٔ طولانی‌مدت روی آن‌ها حساب نکنید.
+        """
+    )
+    st.markdown("**مستندات رسمی**")
+    st.markdown(
+        "- [Speech Generation](https://ai.google.dev/gemini-api/docs/speech-generation)\n"
+        "- [Voice Design](https://ai.google.dev/gemini-api/docs/voice-design)\n"
+        "- [Voice Replication](https://ai.google.dev/gemini-api/docs/voice-replication)\n"
+        "- [Voice Remixing](https://ai.google.dev/gemini-api/docs/voice-remixing)\n"
+        "- [Interactions API](https://ai.google.dev/gemini-api/docs/interactions-overview)"
     )
 
-text_key = "single_text_value" if mode == "تک‌بلندگو" else "multi_text_value"
-st.caption("افزودن برچسب به انتهای متن. در موبایل دکمه‌ها دو ستونه می‌شکنند.")
-tag_cols = st.columns(4)
-for i, tag in enumerate(QUICK_TAGS):
-    tag_cols[i % 4].button(tag, key=f"tagbtn_{mode}_{i}", on_click=append_tag, args=(text_key, tag), use_container_width=True)
-
-st.subheader("نمونه")
-s1, s2, s3, s4 = st.columns(4)
-s1.button("تک‌گوینده", use_container_width=True, on_click=load_single_sample)
-s2.button("گفت‌وگو", use_container_width=True, on_click=load_multi_sample)
-s3.button("شعر", use_container_width=True, on_click=load_poem_sample)
-s4.button("واکنش شنونده", use_container_width=True, on_click=load_backchannel_sample)
-
-# ----------------------------- Validate -----------------------------
-
-with st.expander("متن طولانی و نرم‌سازی", expanded=False):
-    soften = st.checkbox("جایگزینی واژه‌های حساس قبل از ارسال", value=False, help="اگر روشن باشد، متنِ خوانده‌شده با نسخه سندِ کلمه‌به‌کلمه فرق می‌کند.")
-    chunk_long_text = st.checkbox("تقسیم متن طولانی به چند درخواست", value=False)
-    chunk_size = st.slider("سقف کاراکتر هر بخش", 1000, 6000, 3500, 250, disabled=not chunk_long_text)
-text_input = text_input or ""
-token_est = estimate_tokens(text_input)
-st.caption(f"{len(text_input):,} کاراکتر · تخمین محافظه‌کارانه {token_est:,} از {INPUT_TOKEN_LIMIT:,} توکن ورودی")
-if not text_input.strip():
-    st.info("متن را وارد کنید.")
-elif token_est > INPUT_TOKEN_LIMIT and not chunk_long_text:
-    st.warning("احتمالاً از سقف ۸۱۹۲ توکن ورودی رد می‌شود. تقسیم متن را روشن کنید یا متن را کوتاه کنید.")
-elif len(text_input) > 18000 and not chunk_long_text:
-    st.warning("متن خیلی بلند است. تقسیم را روشن کنید یا کوتاه‌ترش کنید.")
-
-multi_valid = bool(speaker1.strip() and speaker2.strip() and speaker1.strip() != speaker2.strip())
-voice_valid = bool(str(selected_voice).strip()) if mode == "تک‌بلندگو" else bool(str(voice1).strip() and str(voice2).strip())
-can_generate = (
-    bool(text_input.strip())
-    and voice_valid
-    and (mode != "چندبلندگو" or multi_valid)
-    and (token_est <= INPUT_TOKEN_LIMIT or chunk_long_text)
-)
-if text_input.strip() and not voice_valid:
-    st.warning("صدا را انتخاب یا شناسه را وارد کنید.")
-
-split_custom = mode == "چندبلندگو" and (is_custom_voice(voice1) or is_custom_voice(voice2))
-preview_blocks, preview_config = None, None
-preview_error = ""
-try:
-    if text_input.strip() and voice_valid and mode == "تک‌بلندگو":
-        preview_blocks, preview_config = build_single_input(text_input.strip()[:500], selected_voice, style_single)
-    elif text_input.strip() and voice_valid and multi_valid and not split_custom:
-        preview_blocks, preview_config = build_multi_input(
-            "\n".join(text_input.splitlines()[:4]), speaker1, speaker2, voice1, voice2, style1, style2, conversational
-        )
-except ValueError as exc:
-    preview_error = str(exc)
-
-with st.expander("شکل درخواست، مطابق سند", expanded=False):
-    if split_custom:
-        st.write("هر خط یک درخواست تک‌بلندگو با `audio/l16` است و PCMها به هم وصل می‌شوند.")
-    elif preview_error:
-        st.warning(preview_error)
-    elif preview_blocks is not None:
-        st.json({
-            "model": model,
-            "input": preview_blocks,
-            "response_format": response_format_for(streaming, mime_type, sample_rate),
-            "generation_config": {"speech_config": preview_config},
-            "stream": streaming,
-        })
-    else:
-        st.caption("بعد از وارد کردن متن، بدنه درخواست اینجا دیده می‌شود.")
-
-telegram_ready = bool(get_secret("TELEGRAM_BOT_TOKEN") and get_secret("TELEGRAM_CHAT_ID"))
-send_telegram = st.checkbox("بعد از تولید به تلگرام بفرست", value=False, disabled=not telegram_ready)
-
-# ----------------------------- Generate -----------------------------
-
-if st.button("🎧 تولید صدا", type="primary", use_container_width=True, disabled=not can_generate):
-    try:
-        sent = sanitize_input_text(text_input) if soften else text_input
-        if sent != text_input:
-            st.warning("برخی واژه‌ها قبل از ارسال جایگزین شدند.")
-            with st.expander("متن ارسال‌شده"):
-                st.text(sent)
-
-        jobs = []
-        if split_custom:
-            for line in sent.splitlines():
-                if not line.strip():
-                    continue
-                spk, content = parse_speaker_line(line, speaker1, speaker2)
-                if not content:
-                    continue
-                voice = voice1 if spk == speaker1 else voice2
-                style = style1 if spk == speaker1 else style2
-                blocks, config = build_single_input(content, voice, style)
-                jobs.append((blocks, config, False, "audio/l16"))
-            if not jobs:
-                raise ValueError("نوبت معتبری برای چسباندن پیدا نشد.")
-            if len(jobs) > CUSTOM_TURN_LIMIT:
-                raise ValueError(f"برای صدای سفارشی حداکثر {CUSTOM_TURN_LIMIT} نوبت در هر بار. متن را کوتاه کنید.")
-        else:
-            if chunk_long_text:
-                chunks = split_multispeaker_lines(sent, int(chunk_size)) if mode == "چندبلندگو" else split_text_safely(sent, int(chunk_size))
-            else:
-                chunks = [sent.strip()]
-            for chunk in chunks:
-                if mode == "تک‌بلندگو":
-                    blocks, config = build_single_input(chunk, selected_voice, style_single)
-                else:
-                    blocks, config = build_multi_input(
-                        chunk, speaker1, speaker2, voice1, voice2, style1, style2, conversational
-                    )
-                jobs.append((blocks, config, streaming, mime_type))
-
-        progress = st.progress(0, text="شروع")
-        wav_parts = []
-        raw_parts = []
-        elapsed = 0.0
-        for i, (blocks, config, stream_flag, job_mime) in enumerate(jobs):
-            progress.progress(i / len(jobs), text=f"بخش {i + 1} از {len(jobs)}")
-            wav_data, raw, took = generate_audio(
-                client, model, blocks, config, stream_flag, job_mime, sample_rate
-            )
-            wav_parts.append(wav_data)
-            raw_parts.append(raw)
-            elapsed += took
-        progress.progress(1.0, text="آماده")
-        merged = wav_parts[0] if len(wav_parts) == 1 else join_wavs(wav_parts)
-        label = f"{mode} · {model} · {sample_rate} Hz · {len(sent)} کاراکتر · {elapsed:.1f}s"
-        st.session_state.last_result = {
-            "wav": merged,
-            "raw": b"".join(raw_parts) if len(raw_parts) == 1 else None,
-            "raw_mime": jobs[0][3] if len(jobs) == 1 and not streaming else None,
-            "label": label,
-            "sent": sent,
-        }
-        st.session_state.history.insert(0, {"wav": merged, "label": label})
-        st.session_state.history = st.session_state.history[:HISTORY_LIMIT]
-        if send_telegram:
-            ok, msg = send_to_telegram(merged, "gemini-tts.wav", label)
-            (st.success if ok else st.error)(msg)
-    except Exception as exc:
-        st.error(f"{exc}")
-        st.info(explain_error(exc))
-        with st.expander("جزئیات فنی"):
-            st.code(traceback.format_exc(), language="text")
-
-result = st.session_state.last_result
-if result and result.get("wav"):
-    st.success("صدا آماده است.")
-    st.audio(result["wav"], format="audio/wav")
-    d1, d2 = st.columns(2)
-    d1.download_button("دانلود WAV", data=result["wav"], file_name="gemini-tts.wav", mime="audio/wav", use_container_width=True)
-    raw_mime = result.get("raw_mime")
-    if result.get("raw") and raw_mime in RAW_EXT:
-        d2.download_button(
-            f"دانلود {RAW_EXT[raw_mime]}",
-            data=result["raw"],
-            file_name=f"gemini-tts.{RAW_EXT[raw_mime]}",
-            mime="application/octet-stream",
-            use_container_width=True,
-        )
-    st.caption(result["label"])
-    if telegram_ready and st.button("ارسال همین فایل به تلگرام"):
-        ok, msg = send_to_telegram(result["wav"], "gemini-tts.wav", result["label"])
-        (st.success if ok else st.error)(msg)
-
-if st.session_state.history:
-    st.subheader("تاریخچه این نشست")
-    for i, item in enumerate(st.session_state.history):
-        st.caption(item["label"])
-        st.audio(item["wav"], format="audio/wav")
-        st.download_button(
-            "دانلود",
-            data=item["wav"],
-            file_name=f"gemini-tts-{i + 1}.wav",
-            mime="audio/wav",
-            key=f"hist_dl_{i}",
-        )
+st.divider()
+st.caption("Gemini TTS Studio Pro — کلید API را در فایل کد قرار ندهید و دسترسی به فایل تنظیمات را محدود نگه دارید.")
