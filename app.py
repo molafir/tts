@@ -21,6 +21,7 @@ import os
 import re
 import struct
 import time
+import traceback
 import wave
 from dataclasses import dataclass
 from typing import Any, Iterable, Optional
@@ -62,6 +63,16 @@ CONSENT_TEXTS = {
     ),
     "العربية": "أنا مالك هذا الصوت وأوافق على أن تستخدم Google هذا الصوت لإنشاء نموذج صوتي اصطناعي.",
 }
+RETRY_ATTEMPTS = 3
+RETRY_BASE_DELAY = 1.5
+
+# Safety settings for interactions.create (optional; removed automatically on rejection)
+INTERACTION_SAFETY_SETTINGS = [
+    {"type": "harassment", "threshold": "off"},
+    {"type": "hate_speech", "threshold": "off"},
+    {"type": "sexually_explicit", "threshold": "off"},
+    {"type": "dangerous_content", "threshold": "off"},
+]
 
 
 # ----------------------------- Generic helpers -----------------------------
@@ -103,7 +114,6 @@ def decode_base64_or_bytes(value: Any) -> bytes:
     if value is None:
         raise ValueError("پاسخ API دادهٔ صوتی نداشت.")
     if isinstance(value, bytes):
-        # SDK helpers may expose bytes directly; otherwise API docs use base64 text.
         if value[:4] == b"RIFF":
             return value
         try:
@@ -192,7 +202,6 @@ def encode_mulaw_sample(sample: int) -> int:
 
 
 def encode_alaw_sample(sample: int) -> int:
-    # ITU-T G.711 A-law encoder.
     if sample >= 0:
         mask = 0xD5
         pcm = sample
@@ -285,7 +294,6 @@ def split_long_text(text: str, max_chars: int = MAX_CHUNK_CHARS) -> list[str]:
                 continue
             if len(unit) > max_chars:
                 flush()
-                # Hard split only when a single sentence/word is itself oversized.
                 for start in range(0, len(unit), max_chars):
                     pieces.append(unit[start:start + max_chars].strip())
                 continue
@@ -298,6 +306,21 @@ def split_long_text(text: str, max_chars: int = MAX_CHUNK_CHARS) -> list[str]:
         flush()
     flush()
     return [p for p in pieces if p]
+
+
+def is_retriable(exc: Exception) -> bool:
+    msg = str(exc).lower()
+    tokens = ("429", "quota", "rate limit", "rate_limit", "timeout",
+              "timed out", "temporarily", "500", "502", "503", "504")
+    return any(token in msg for token in tokens)
+
+
+def safety_rejected(exc: Exception) -> bool:
+    msg = str(exc).lower()
+    if "safety_setting" in msg or "safety_settings" in msg:
+        return True
+    return "safety" in msg and any(k in msg for k in
+                                   ("extra", "unknown", "unexpected", "forbidden", "invalid", "validation"))
 
 
 @dataclass
@@ -326,7 +349,6 @@ def parse_dialogue(raw: str, speaker_a: str, speaker_b: str, style_a: str, style
             who = labels[match.group(1).strip().casefold()]
             text = match.group(2).strip()
         else:
-            # Unlabelled lines are assigned to speaker A; no prefix is injected into speech.
             who, text = "a", line
         if text:
             turns.append(Turn(
@@ -338,7 +360,6 @@ def parse_dialogue(raw: str, speaker_a: str, speaker_b: str, style_a: str, style
 
 
 def chunk_turns(turns: list[Turn], max_chars: int = MAX_CHUNK_CHARS) -> list[list[Turn]]:
-    """Split oversized turns and group adjacent turns without losing speaker labels."""
     expanded: list[Turn] = []
     for turn in turns:
         for part in split_long_text(turn.text, max_chars=max_chars):
@@ -376,6 +397,37 @@ def make_input_content(turns: list[Turn]) -> list[dict[str, Any]]:
     return [{"type": "user_input", "content": content}]
 
 
+def _build_speech_config(voice_a: str, voice_b: Optional[str],
+                         speaker_a: str = "Speaker A", speaker_b: str = "Speaker B") -> Any:
+    if voice_b:
+        return {
+            "speakers": [
+                {"speaker": speaker_a, "voice": voice_a},
+                {"speaker": speaker_b, "voice": voice_b},
+            ]
+        }
+    return [{"voice": voice_a}]
+
+
+def _call_tts_with_fallbacks(client: Any, **kwargs) -> Any:
+    """Try safety_settings; drop it on rejection. Never adds mode=conversational."""
+    last_exc = None
+    dropped_safety = False
+    for attempt in range(RETRY_ATTEMPTS):
+        try:
+            return client.interactions.create(**kwargs)
+        except Exception as exc:
+            last_exc = exc
+            if not dropped_safety and safety_rejected(exc):
+                kwargs.pop("safety_settings", None)
+                dropped_safety = True
+                continue
+            if attempt == RETRY_ATTEMPTS - 1 or not is_retriable(exc):
+                raise
+            time.sleep(RETRY_BASE_DELAY * (2 ** attempt))
+    raise last_exc
+
+
 def generate_one_chunk(
     client: Any,
     model: str,
@@ -389,24 +441,13 @@ def generate_one_chunk(
     use_stream: bool = False,
 ) -> bytes:
     content = make_input_content(turns)
-    if voice_b:
-        speech_config: Any = {
-            "mode": "conversational",
-            "speakers": [
-                {"speaker": speaker_a, "voice": voice_a},
-                {"speaker": speaker_b, "voice": voice_b},
-            ],
-        }
-    else:
-        speech_config = [{"voice": voice_a}]
+    speech_config = _build_speech_config(voice_a, voice_b, speaker_a, speaker_b)
 
-    response_format: dict[str, Any] = {"type": "audio"}
     if use_stream:
-        # Streaming TTS chunks are headerless 24 kHz mono PCM16 by default.
         stream = client.interactions.create(
             model=model,
             input=content,
-            response_format=response_format,
+            response_format={"type": "audio"},
             generation_config={"speech_config": speech_config},
             stream=True,
         )
@@ -424,17 +465,20 @@ def generate_one_chunk(
             raise RuntimeError("استریم تمام شد اما قطعهٔ صوتی دریافت نشد.")
         return pcm16_to_wav(pcm, sample_rate=24000, channels=1)
 
+    response_format: dict[str, Any] = {"type": "audio"}
     if mime_type != "audio/wav":
         response_format["mime_type"] = mime_type
         response_format["sample_rate"] = sample_rate
     else:
         response_format["mime_type"] = "audio/wav"
 
-    interaction = client.interactions.create(
+    interaction = _call_tts_with_fallbacks(
+        client,
         model=model,
         input=content,
         response_format=response_format,
         generation_config={"speech_config": speech_config},
+        safety_settings=INTERACTION_SAFETY_SETTINGS,
     )
     audio = obj_get(obj_get(interaction, "output_audio"), "data")
     return decode_base64_or_bytes(audio)
@@ -470,7 +514,6 @@ def synthesize(
         turn_groups = chunk_turns(turns)
         voice_b_for_request = voice_b
 
-    # For streaming only, force the documented raw PCM default and build WAVs.
     if use_stream:
         raw_chunks = []
         for idx, group in enumerate(turn_groups, 1):
@@ -569,15 +612,33 @@ def create_designed_voice(
         "display_name": display_name.strip(),
         "prompted": {"input": prompt.strip()},
     }
+    optional: dict[str, Any] = {}
     if gender in {"male", "female"}:
-        voice["gender"] = gender
+        optional["gender"] = gender
     if language_code.strip():
-        voice["language_code"] = language_code.strip()
-    return client.voices.create(store=True, voice=voice)
+        optional["language_code"] = language_code.strip()
+    voice.update(optional)
+
+    last_exc = None
+    for attempt in range(RETRY_ATTEMPTS):
+        try:
+            return client.voices.create(store=True, voice=voice)
+        except Exception as exc:
+            last_exc = exc
+            msg = str(exc).lower()
+            if "500" in msg or "internal" in msg:
+                if optional and attempt == 0:
+                    voice = {k: v for k, v in voice.items() if k not in optional}
+                    continue
+            if "safety" in msg:
+                raise ValueError("توضیح صدا توسط فیلتر ایمنی بسته شد. سن و توصیف ظاهری حساس را حذف کنید.") from exc
+            if attempt == RETRY_ATTEMPTS - 1 or not is_retriable(exc):
+                raise
+            time.sleep(RETRY_BASE_DELAY * (2 ** attempt))
+    raise last_exc
 
 
 def create_remixed_voice(client: Any, base_voice: str, prompt: str, display_name: str):
-    # Voice remixing was added to the Gemini API changelog on 2026-11-04.
     return client.voices.create(
         store=True,
         voice={
@@ -616,6 +677,7 @@ def create_replicated_voice(
     validate_replication_wav(source_audio, "صدای مرجع", require_duration=True)
     validate_replication_wav(consent_audio, "صدای رضایت")
     voice: dict[str, Any] = {
+        "model": model,
         "type": "replicated",
         "display_name": display_name.strip() or "Replicated voice",
         "replicated": {
@@ -623,11 +685,6 @@ def create_replicated_voice(
             "consent_audio": {"mime_type": "audio/wav", "data": base64.b64encode(consent_audio).decode("ascii")},
         },
     }
-    if not store:
-        voice["model"] = model
-    else:
-        # The Gemini API developer docs show model on the stored replication request.
-        voice["model"] = model
     return client.voices.create(store=store, voice=voice)
 
 
@@ -695,6 +752,16 @@ st.markdown(
     textarea, input, .stSelectbox, .stTextInput { direction: rtl; text-align: right; }
     div[data-testid="stFileUploader"] { direction: rtl; }
     .small-note {font-size: .88rem; color: #777;}
+    .stButton > button { white-space: normal; height: auto; line-height: 1.35; }
+    @media (max-width: 700px) {
+      div[data-testid="stHorizontalBlock"] { flex-wrap: wrap; }
+      div[data-testid="stHorizontalBlock"] > div[data-testid="column"] {
+        flex: 1 1 48% !important;
+        width: 48% !important;
+        min-width: 48% !important;
+      }
+      .stButton > button { font-size: 0.78rem; padding: 0.4rem 0.35rem; }
+    }
     </style>
     """,
     unsafe_allow_html=True,
@@ -812,7 +879,6 @@ with tab_tts:
             placeholder=f"{speaker_a}: سلام، حالت چطوره؟\n{speaker_b}: ممنون، خوبم. تو چطوری؟",
             key="multi_text",
         )
-        voice_style = ""
 
     st.divider()
     cfmt, crate, cstream = st.columns([1.3, 1, 1])
@@ -866,6 +932,8 @@ with tab_tts:
             except Exception as exc:
                 st.error("تولید صدا ناموفق بود.")
                 st.code(safe_error(exc))
+                with st.expander("جزئیات فنی"):
+                    st.code(traceback.format_exc(), language="text")
 
     if st.session_state.last_audio_wav:
         st.divider()
@@ -1152,7 +1220,7 @@ with tab_help:
         - برنامه متن شما را به‌صورت خودکار سانسور، ترجمه یا اصلاح نمی‌کند.
         - متن بلند به قطعات کوچک‌تر تقسیم می‌شود. برش بر اساس تعداد نویسه محافظه‌کارانه است و جایگزین شمارش دقیق توکن API نیست.
         - در حالت استریم، خروجی PCM خام 24kHz مونو دریافت و در انتها به WAV تبدیل می‌شود.
-        - تنظیمات سفارشی `safety_settings` در Interactions API پشتیبانی نمی‌شود؛ برنامه چنین پارامتری را به درخواست TTS اضافه نمی‌کند.
+        - تنظیمات سفارشی `safety_settings` به‌صورت اختیاری ارسال می‌شود و در صورت ناسازگاری با نسخه SDK، خودکار حذف می‌شود.
         - تکثیر صدا فقط با فایل مرجع و رضایت همان گوینده انجام شود. برنامه فرمت WAV را بررسی می‌کند؛ اعتبار رضایت را خود سرویس Google ارزیابی می‌کند.
         - شناسه‌های `voice_...` ذخیره‌شده در پروژه مدیریت می‌شوند؛ کلیدهای `voicekey_...` را محرمانه نگه دارید و به‌دلیل زمان‌دار بودن، برای استفادهٔ طولانی‌مدت روی آن‌ها حساب نکنید.
         """
