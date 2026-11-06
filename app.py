@@ -32,7 +32,7 @@ import streamlit as st
 try:
     from google import genai
     from google.genai import types
-except ImportError:  # Friendly error in the UI
+except ImportError:
     genai = None
     types = None
 
@@ -43,7 +43,7 @@ TTS_MODELS = {
     "سرعت و هزینه کمتر — Flash-Lite": "gemini-3.8-flash-lite-tts",
 }
 TEXT_MODEL = "gemini-3.8-flash"
-MAX_CHUNK_CHARS = 3500  # Conservative character-based split; not an API token count.
+MAX_CHUNK_CHARS = 3500
 PREBUILT_VOICES = [
     "Zephyr", "Puck", "Charon", "Kore", "Fenrir", "Leda", "Orus", "Aoede",
     "Callirrhoe", "Autonoe", "Enceladus", "Iapetus", "Umbriel", "Algieba",
@@ -63,7 +63,7 @@ CONSENT_TEXTS = {
     ),
     "العربية": "أنا مالك هذا الصوت وأوافق على أن تستخدم Google هذا الصوت لإنشاء نموذج صوتي اصطناعي.",
 }
-RETRY_ATTEMPTS = 3
+RETRY_ATTEMPTS = 4
 RETRY_BASE_DELAY = 1.5
 
 # Safety settings for interactions.create (optional; removed automatically on rejection)
@@ -86,7 +86,6 @@ def obj_get(obj: Any, name: str, default: Any = None) -> Any:
 
 
 def safe_error(exc: Exception) -> str:
-    """Keep API errors readable without swallowing their underlying message."""
     message = str(exc).strip() or exc.__class__.__name__
     return message[:1800]
 
@@ -267,7 +266,6 @@ def join_wav_files(chunks: list[bytes]) -> bytes:
 
 
 def split_long_text(text: str, max_chars: int = MAX_CHUNK_CHARS) -> list[str]:
-    """Split without dropping text; paragraph/sentence boundaries are preferred."""
     text = text.strip()
     if not text:
         return []
@@ -313,6 +311,16 @@ def is_retriable(exc: Exception) -> bool:
     tokens = ("429", "quota", "rate limit", "rate_limit", "timeout",
               "timed out", "temporarily", "500", "502", "503", "504")
     return any(token in msg for token in tokens)
+
+
+def is_503_error(exc: Exception) -> bool:
+    msg = str(exc).lower()
+    return "503" in msg or "unavailable" in msg or "high demand" in msg
+
+
+def is_404_error(exc: Exception) -> bool:
+    msg = str(exc).lower()
+    return "404" in msg or "not found" in msg or "not_found" in msg
 
 
 def safety_rejected(exc: Exception) -> bool:
@@ -409,18 +417,30 @@ def _build_speech_config(voice_a: str, voice_b: Optional[str],
     return [{"voice": voice_a}]
 
 
-def _call_tts_with_fallbacks(client: Any, **kwargs) -> Any:
-    """Try safety_settings; drop it on rejection. Never adds mode=conversational."""
+def _call_tts_with_fallbacks(client: Any, model: str, **kwargs) -> Any:
+    """Retry on transient errors; fall back to lite model on 503; fall back on 404."""
     last_exc = None
     dropped_safety = False
+    current_model = model
+    model_candidates = [model] + [m for m in TTS_MODELS.values() if m != model]
+    candidate_idx = 0
     for attempt in range(RETRY_ATTEMPTS):
         try:
-            return client.interactions.create(**kwargs)
+            return client.interactions.create(model=current_model, **kwargs)
         except Exception as exc:
             last_exc = exc
             if not dropped_safety and safety_rejected(exc):
                 kwargs.pop("safety_settings", None)
                 dropped_safety = True
+                continue
+            if is_404_error(exc):
+                candidate_idx += 1
+                if candidate_idx < len(model_candidates):
+                    current_model = model_candidates[candidate_idx]
+                    continue
+            if is_503_error(exc) and current_model != "gemini-3.8-flash-lite-tts":
+                current_model = "gemini-3.8-flash-lite-tts"
+                time.sleep(RETRY_BASE_DELAY * (2 ** attempt))
                 continue
             if attempt == RETRY_ATTEMPTS - 1 or not is_retriable(exc):
                 raise
@@ -444,8 +464,9 @@ def generate_one_chunk(
     speech_config = _build_speech_config(voice_a, voice_b, speaker_a, speaker_b)
 
     if use_stream:
-        stream = client.interactions.create(
-            model=model,
+        stream = _call_tts_with_fallbacks(
+            client,
+            model,
             input=content,
             response_format={"type": "audio"},
             generation_config={"speech_config": speech_config},
@@ -474,7 +495,7 @@ def generate_one_chunk(
 
     interaction = _call_tts_with_fallbacks(
         client,
-        model=model,
+        model,
         input=content,
         response_format=response_format,
         generation_config={"speech_config": speech_config},
@@ -791,13 +812,14 @@ with st.sidebar:
     api_key = st.text_input("Gemini API Key", value=api_default, type="password", help="کلید را می‌توانید در Streamlit Secrets با نام GEMINI_API_KEY ذخیره کنید.")
     model_label = st.selectbox("مدل گفتار", list(TTS_MODELS.keys()), index=0)
     selected_model = TTS_MODELS[model_label]
+    st.caption("اگر مدل اصلی با خطای 404 مواجه شد، برنامه به‌طور خودکار مدل‌های جایگزین را امتحان می‌کند.")
     st.divider()
     st.subheader("تلگرام — اختیاری")
     tg_token = st.text_input("Bot Token", value=get_secret("TELEGRAM_BOT_TOKEN"), type="password")
     tg_chat_id = st.text_input("Chat ID", value=get_secret("TELEGRAM_CHAT_ID"))
     st.caption("برای WAV، ارسال به‌صورت فایل (sendDocument) انتخاب مناسب‌تری است.")
     st.divider()
-    st.caption("مدل‌های TTS این نسخه: Gemini 3.8 Flash TTS و Flash-Lite TTS")
+    st.caption("مدل‌های TTS موجود: 3.8 Flash, 3.8 Flash-Lite")
 
 
 def obtain_client():
@@ -1216,11 +1238,12 @@ with tab_help:
         زن: ممنون، خوبم. تو چطوری؟
         ```
         **نکات مهم فنی**
-        - برای Gemini 3.8 TTS، راهنمای لحن پایدار هر نوبت در `speech_metadata.style` ارسال می‌شود؛ تگ‌های کوتاه مثل `<laugh>`، `<sigh>` و `<short pause>` داخل متن باقی می‌مانند.
+        - برای Gemini TTS، راهنمای لحن پایدار هر نوبت در `speech_metadata.style` ارسال می‌شود؛ تگ‌های کوتاه مثل `<laugh>`، `<sigh>` و `<short pause>` داخل متن باقی می‌مانند.
         - برنامه متن شما را به‌صورت خودکار سانسور، ترجمه یا اصلاح نمی‌کند.
         - متن بلند به قطعات کوچک‌تر تقسیم می‌شود. برش بر اساس تعداد نویسه محافظه‌کارانه است و جایگزین شمارش دقیق توکن API نیست.
         - در حالت استریم، خروجی PCM خام 24kHz مونو دریافت و در انتها به WAV تبدیل می‌شود.
         - تنظیمات سفارشی `safety_settings` به‌صورت اختیاری ارسال می‌شود و در صورت ناسازگاری با نسخه SDK، خودکار حذف می‌شود.
+        - **اگر مدل با خطای 404 مواجه شد، برنامه به‌طور خودکار مدل‌های جایگزین را امتحان می‌کند.**
         - تکثیر صدا فقط با فایل مرجع و رضایت همان گوینده انجام شود. برنامه فرمت WAV را بررسی می‌کند؛ اعتبار رضایت را خود سرویس Google ارزیابی می‌کند.
         - شناسه‌های `voice_...` ذخیره‌شده در پروژه مدیریت می‌شوند؛ کلیدهای `voicekey_...` را محرمانه نگه دارید و به‌دلیل زمان‌دار بودن، برای استفادهٔ طولانی‌مدت روی آن‌ها حساب نکنید.
         """
