@@ -451,57 +451,62 @@ def _voice_config_for_generate_content(voice):
     if not voice:
         raise ValueError("شناسه صدا خالی است.")
     if voice in ALL_VOICES:
-        return {"prebuilt_voice_config": {"voice_name": voice}}
+        return {"prebuiltVoiceConfig": {"voiceName": voice}}
     return {"voice": voice}
 
 
 def input_blocks_to_generate_content(input_blocks, speech_config):
-    """Translate internal turn blocks into the GenerateContent request schema."""
-    parts = []
+    """Build the verified Gemini Developer API GenerateContent JSON body."""
+    text_parts = []
     for block in input_blocks or []:
         if block.get("type") != "user_input":
             continue
         for item in block.get("content", []) or []:
             if item.get("type") != "text":
                 continue
-            part = {"text": item.get("text", "")}
-            metadata = {}
+            text = (item.get("text") or "").strip()
+            if not text:
+                continue
+            # speechMetadata is not part of the Developer API Part schema.
+            # Preserve speaker labels as ordinary text for multi-speaker input.
+            speaker = None
             for annotation in item.get("annotations") or []:
                 if annotation.get("type") == "speech_metadata":
-                    if annotation.get("speaker"):
-                        metadata["speaker"] = annotation["speaker"]
-                    if annotation.get("style"):
-                        metadata["style"] = annotation["style"]
-            if metadata:
-                part["speech_metadata"] = metadata
-            parts.append(part)
+                    speaker = annotation.get("speaker")
+                    break
+            text_parts.append(f"{speaker}: {text}" if speaker else text)
 
-    if not parts:
+    if not text_parts:
         raise ValueError("متن معتبری برای تولید صوت پیدا نشد.")
 
     if isinstance(speech_config, list):
         voice = speech_config[0].get("voice", "Kore")
-        speech_cfg = {"voice_config": _voice_config_for_generate_content(voice)}
+        speech_cfg = {"voiceConfig": _voice_config_for_generate_content(voice)}
     elif isinstance(speech_config, dict) and speech_config.get("speakers"):
         speaker_configs = [
             {
                 "speaker": item["speaker"],
-                "voice_config": _voice_config_for_generate_content(item["voice"]),
+                "voiceConfig": _voice_config_for_generate_content(item["voice"]),
             }
             for item in speech_config["speakers"]
         ]
         speech_cfg = {
-            "multi_speaker_voice_config": {
-                "speaker_voice_configs": speaker_configs
+            "multiSpeakerVoiceConfig": {
+                "speakerVoiceConfigs": speaker_configs
             }
         }
     else:
         raise ValueError("ساختار تنظیمات صدا قابل تبدیل به GenerateContent نیست.")
 
-    return (
-        [{"role": "user", "parts": parts}],
-        {"response_modalities": ["AUDIO"], "speech_config": speech_cfg},
-    )
+    # IMPORTANT: this exact nesting (generationConfig.speechConfig) is the
+    # structure verified by the user's successful direct REST test.
+    return {
+        "contents": [{"parts": [{"text": "\n".join(text_parts)}]}],
+        "generationConfig": {
+            "responseModalities": ["AUDIO"],
+            "speechConfig": speech_cfg,
+        },
+    }
 
 
 def response_format_for(stream, mime_type, sample_rate):
@@ -531,43 +536,48 @@ def raw_to_wav(raw, mime_type, sample_rate):
     return pcm_to_wav_bytes(raw, rate=24000)
 
 
-def generate_audio(client, model, input_blocks, speech_config, stream, mime_type, sample_rate):
+def generate_audio(api_key, model, input_blocks, speech_config, stream=False, mime_type="audio/wav", sample_rate=24000):
+    """Call the verified Developer API REST endpoint (not SDK model serialization)."""
     started = time.time()
-    contents, config = input_blocks_to_generate_content(input_blocks, speech_config)
+    body = input_blocks_to_generate_content(input_blocks, speech_config)
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
+    headers = {"Content-Type": "application/json", "x-goog-api-key": api_key}
+    last_exc = None
+    for attempt in range(RETRY_ATTEMPTS):
+        try:
+            response = requests.post(url, headers=headers, json=body, timeout=(20, 240))
+            if not response.ok:
+                try:
+                    err = response.json().get("error", {})
+                    detail = err.get("message") or response.text[:1200]
+                except Exception:
+                    detail = response.text[:1200]
+                raise RuntimeError(f"Gemini API {response.status_code}: {detail}")
+            payload = response.json()
+            audio_chunks = []
+            for candidate in payload.get("candidates", []):
+                for part in candidate.get("content", {}).get("parts", []):
+                    inline = part.get("inlineData") or part.get("inline_data") or {}
+                    encoded = inline.get("data")
+                    if encoded:
+                        audio_chunks.append(base64.b64decode(encoded))
+            raw = b"".join(audio_chunks)
+            if not raw:
+                reason = None
+                candidates = payload.get("candidates", [])
+                if candidates:
+                    reason = candidates[0].get("finishReason")
+                raise RuntimeError(f"API داده صوتی برنگرداند. finish_reason={reason}; پاسخ: {str(payload)[:1000]}")
+            # The verified unary Developer API response is already a complete WAV.
+            wav_data = raw if raw.startswith(b"RIFF") else pcm_to_wav_bytes(raw, rate=24000)
+            return wav_data, raw, time.time() - started
+        except Exception as exc:
+            last_exc = exc
+            if attempt == RETRY_ATTEMPTS - 1 or not is_retriable(exc):
+                raise
+            time.sleep(RETRY_BASE_DELAY * (2 ** attempt))
+    raise last_exc
 
-    if stream:
-        response_stream = create_with_retry(
-            client, model=model, contents=contents, config=config, stream=True
-        )
-        chunks = []
-        for chunk in response_stream:
-            data = _extract_inline_audio(chunk)
-            if data:
-                chunks.append(data)
-        raw = b"".join(chunks)
-        if not raw:
-            raise RuntimeError("استریم تمام شد اما داده صوتی دریافت نشد.")
-        return raw_to_wav(raw, "audio/l16", 24000), raw, time.time() - started
-
-    try:
-        response = create_with_retry(
-            client, model=model, contents=contents, config=config, stream=False
-        )
-    except Exception as exc:
-        msg = str(exc).lower()
-        if "content_blocked" in msg or "policy" in msg or "prohibited" in msg:
-            raise RuntimeError(
-                "متن توسط فیلتر ایمنی Gemini مسدود شد. واژه‌ها را بررسی کنید."
-            ) from exc
-        raise
-
-    raw = _extract_inline_audio(response)
-    if not raw:
-        candidates = getattr(response, "candidates", None) or []
-        reason = getattr(candidates[0], "finish_reason", None) if candidates else None
-        raise RuntimeError(f"API داده صوتی برنگرداند. finish_reason={reason}")
-    wav_data = raw if raw.startswith(b"RIFF") else pcm_to_wav_bytes(raw, rate=24000)
-    return wav_data, raw, time.time() - started
 
 def explain_error(exc):
     err = str(exc)
@@ -664,9 +674,9 @@ with st.sidebar:
         "- `gemini-3.8-flash-tts` کیفیت بالاتر"
     )
     st.info(
-        "تک‌بلندگو: `speechConfig.voiceConfig`.\n\n"
-        "چندبلندگو: `speechConfig.multiSpeakerVoiceConfig`.\n\n"
-        "خروجی عادی WAV و خروجی استریم PCM خام ۲۴ کیلوهرتز است."
+        "تک‌بلندگو: `generationConfig.speechConfig.voiceConfig`.\n\n"
+        "چندبلندگو: `generationConfig.speechConfig.multiSpeakerVoiceConfig`.\n\n"
+        "خروجی فعلی WAV؛ استریمینگ تا تأیید endpoint غیرفعال است."
     )
     st.markdown(
         "**برچسب داخل متن** (خوانده نمی‌شود، اجرا می‌شود)\n\n"
@@ -1063,13 +1073,14 @@ with c2:
     if model.endswith("lite-tts"):
         st.caption("lite برای تولید روزمره و تک‌گویی است. دیالوگ سنگین را با flash امتحان کنید.")
 with c3:
-    streaming = st.checkbox("استریمینگ", value=False, help="تکه‌های PCM خام تا پایان جمع می‌شوند و یک WAV ساخته می‌شود.")
+    st.checkbox("استریمینگ", value=False, disabled=True, help="در حال حاضر فقط درخواست عادی REST که با کلید شما تأیید شده اجرا می‌شود.")
 
-mime_type = "audio/l16" if streaming else "audio/wav"
+streaming = False
+mime_type = "audio/wav"
 sample_rate = 24000
 st.caption(
-    "خروجی GenerateContent برای Gemini 3.8: WAV در حالت عادی و PCM خام ۲۴ کیلوهرتز در حالت استریم. "
-    "نرخ نمونه و کدک‌های تلفنی از این رابط در این نسخه تنظیم نمی‌شوند."
+    "مسیر تولید صدا از REST GenerateContent استفاده می‌کند؛ خروجی WAV با نرخ ۲۴ کیلوهرتز. "
+    "استریمینگ و تنظیمات سبکِ جداگانه تا زمان تأیید ساختار API غیرفعال‌اند."
 )
 
 # ----------------------------- Transcript -----------------------------
@@ -1287,15 +1298,8 @@ with st.expander("پیش‌نمایش درخواست GenerateContent", expanded=
     elif preview_error:
         st.warning(preview_error)
     elif preview_blocks is not None:
-        preview_contents, preview_generation_config = input_blocks_to_generate_content(
-            preview_blocks, preview_config
-        )
-        st.json({
-            "model": model,
-            "contents": preview_contents,
-            "generation_config": preview_generation_config,
-            "method": "generate_content_stream" if streaming else "generate_content",
-        })
+        preview_body = input_blocks_to_generate_content(preview_blocks, preview_config)
+        st.json({"model": model, **preview_body, "method": "REST generateContent"})
     else:
         st.caption("بعد از وارد کردن متن، بدنه درخواست اینجا دیده می‌شود.")
 
@@ -1349,7 +1353,7 @@ if st.button("🎧 تولید صدا", type="primary", use_container_width=True,
         for i, (blocks, config, stream_flag, job_mime) in enumerate(jobs):
             progress.progress(i / len(jobs), text=f"بخش {i + 1} از {len(jobs)}")
             wav_data, raw, took = generate_audio(
-                client, model, blocks, config, stream_flag, job_mime, sample_rate
+                api_key, model, blocks, config, stream_flag, job_mime, sample_rate
             )
             wav_parts.append(wav_data)
             raw_parts.append(raw)
