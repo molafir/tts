@@ -2,7 +2,7 @@
 # هم‌تراز با راهنمای AI Studio تا ۲۸ اکتبر ۲۰۲۶ و صفحه مدل تا ۴ نوامبر ۲۰۲۶
 # سقف رسمی: ۸۱۹۲ توکن ورودی، ۱۶۳۸۴ توکن خروجی. هر دو مدل ۳.۸ یک طرح درخواست دارند.
 # pip install "google-genai>=2.25.0" streamlit requests
-# streamlit run gemini_tts_studio.py
+# streamlit run app.py
 import base64
 import io
 import re
@@ -39,7 +39,7 @@ textarea, .stTextArea textarea, .stTextInput input { direction: rtl; text-align:
 """
 st.markdown(RTL_CSS, unsafe_allow_html=True)
 st.title("🎙️ Gemini TTS Studio Pro")
-st.caption("Gemini 3.8 · Interactions API · کتابخانه صدا، طراحی صدا، استریم و تلگرام")
+st.caption("Gemini 3.8 · GenerateContent API · کتابخانه صدا، طراحی صدا، استریم و تلگرام")
 
 # ----------------------------- Constants -----------------------------
 
@@ -95,7 +95,7 @@ QUICK_TAGS = [
     "|oh hmm|", "|oh really?|", "|absolutely|", "|ok|",
 ]
 
-# ★ مطابق سند اکتبر ۲۰۲۶: در Interactions API از type و threshold کوچک استفاده می‌شود.
+# ★ مطابق سند اکتبر ۲۰۲۶: در GenerateContent API از type و threshold کوچک استفاده می‌شود.
 INTERACTION_SAFETY_SETTINGS = [
     {"type": "harassment", "threshold": "off"},
     {"type": "hate_speech", "threshold": "off"},
@@ -364,44 +364,31 @@ def is_retriable(exc):
     tokens = ("429", "quota", "rate limit", "rate_limit", "timeout", "timed out", "temporarily", "500", "502", "503", "504")
     return any(token in msg for token in tokens)
 
+
 def safety_rejected(exc):
     msg = str(exc).lower()
-    if "safety_setting" in msg or "safety_settings" in msg:
-        return True
-    return "safety" in msg and any(k in msg for k in ("extra", "unknown", "unexpected", "forbidden", "invalid", "validation"))
+    return "safety" in msg or "prohibited_content" in msg or "content_blocked" in msg
 
-def drop_mode(kwargs):
-    gen = kwargs.get("generation_config")
-    if not isinstance(gen, dict):
-        return False
-    sc = gen.get("speech_config")
-    if isinstance(sc, dict) and "mode" in sc:
-        sc.pop("mode", None)
-        return True
-    return False
 
-def create_with_retry(client, **kwargs):
+def create_with_retry(client, model, contents, config, stream=False):
+    """Generate speech through Gemini GenerateContent API with bounded retries."""
     last_exc = None
-    dropped_safety = False
-    dropped_mode = False
     for attempt in range(RETRY_ATTEMPTS):
         try:
-            return client.interactions.create(**kwargs)
+            if stream:
+                return client.models.generate_content_stream(
+                    model=model, contents=contents, config=config
+                )
+            return client.models.generate_content(
+                model=model, contents=contents, config=config
+            )
         except Exception as exc:
             last_exc = exc
-            low = str(exc).lower()
-            if not dropped_safety and safety_rejected(exc):
-                kwargs.pop("safety_settings", None)
-                dropped_safety = True
-                continue
-            if not dropped_mode and ("mode" in low or "extra_forbidden" in low or "unknown field" in low):
-                if drop_mode(kwargs):
-                    dropped_mode = True
-                    continue
             if attempt == RETRY_ATTEMPTS - 1 or not is_retriable(exc):
                 raise
             time.sleep(RETRY_BASE_DELAY * (2 ** attempt))
     raise last_exc
+
 
 def generate_text_with_retry(client, model, prompt):
     last_exc = None
@@ -426,12 +413,14 @@ def generate_text_with_retry(client, model, prompt):
             time.sleep(RETRY_BASE_DELAY * (2 ** attempt))
     raise last_exc
 
+
 def build_single_input(text, voice, style):
     content_item = {"type": "text", "text": text}
     style = (style or "").strip()
     if style:
         content_item["annotations"] = [{"type": "speech_metadata", "style": style}]
     return [{"type": "user_input", "content": [content_item]}], [{"voice": voice}]
+
 
 def build_multi_input(text, spk1, spk2, voice1, voice2, style1, style2, conversational=False):
     blocks = []
@@ -454,92 +443,131 @@ def build_multi_input(text, spk1, spk2, voice1, voice2, style1, style2, conversa
             {"speaker": spk2, "voice": voice2},
         ]
     }
-    if conversational:
-        config["mode"] = "conversational"
     return [{"type": "user_input", "content": blocks}], config
 
+
+def _voice_config_for_generate_content(voice):
+    voice = (voice or "").strip()
+    if not voice:
+        raise ValueError("شناسه صدا خالی است.")
+    if voice in ALL_VOICES:
+        return {"prebuilt_voice_config": {"voice_name": voice}}
+    return {"voice": voice}
+
+
+def input_blocks_to_generate_content(input_blocks, speech_config):
+    """Translate internal turn blocks into the GenerateContent request schema."""
+    parts = []
+    for block in input_blocks or []:
+        if block.get("type") != "user_input":
+            continue
+        for item in block.get("content", []) or []:
+            if item.get("type") != "text":
+                continue
+            part = {"text": item.get("text", "")}
+            metadata = {}
+            for annotation in item.get("annotations") or []:
+                if annotation.get("type") == "speech_metadata":
+                    if annotation.get("speaker"):
+                        metadata["speaker"] = annotation["speaker"]
+                    if annotation.get("style"):
+                        metadata["style"] = annotation["style"]
+            if metadata:
+                part["speech_metadata"] = metadata
+            parts.append(part)
+
+    if not parts:
+        raise ValueError("متن معتبری برای تولید صوت پیدا نشد.")
+
+    if isinstance(speech_config, list):
+        voice = speech_config[0].get("voice", "Kore")
+        speech_cfg = {"voice_config": _voice_config_for_generate_content(voice)}
+    elif isinstance(speech_config, dict) and speech_config.get("speakers"):
+        speaker_configs = [
+            {
+                "speaker": item["speaker"],
+                "voice_config": _voice_config_for_generate_content(item["voice"]),
+            }
+            for item in speech_config["speakers"]
+        ]
+        speech_cfg = {
+            "multi_speaker_voice_config": {
+                "speaker_voice_configs": speaker_configs
+            }
+        }
+    else:
+        raise ValueError("ساختار تنظیمات صدا قابل تبدیل به GenerateContent نیست.")
+
+    return (
+        [{"role": "user", "parts": parts}],
+        {"response_modalities": ["AUDIO"], "speech_config": speech_cfg},
+    )
+
+
 def response_format_for(stream, mime_type, sample_rate):
-    rate = int(sample_rate or 24000)
-    if stream and rate == 24000:
-        return {"type": "audio"}
-    if stream:
-        return {"type": "audio", "mime_type": "audio/l16", "sample_rate": rate}
-    fmt = {"type": "audio", "mime_type": mime_type}
-    if rate != 24000:
-        fmt["sample_rate"] = rate
-    return fmt
+    return {
+        "api": "GenerateContent",
+        "response_modalities": ["AUDIO"],
+        "stream": bool(stream),
+        "output": "audio/l16 (24 kHz PCM)" if stream else "audio/wav (24 kHz)",
+    }
+
+
+def _extract_inline_audio(response):
+    chunks = []
+    for candidate in (getattr(response, "candidates", None) or []):
+        content = getattr(candidate, "content", None)
+        for part in (getattr(content, "parts", None) or []):
+            inline = getattr(part, "inline_data", None)
+            data = getattr(inline, "data", None) if inline else None
+            if data:
+                chunks.append(decode_b64(data))
+    return b"".join(chunks)
+
 
 def raw_to_wav(raw, mime_type, sample_rate):
-    rate = int(sample_rate or 24000)
     if raw.startswith(b"RIFF"):
         return raw
-    if mime_type == "audio/mulaw":
-        return pcm_to_wav_bytes(mulaw_to_pcm16(raw), rate=rate)
-    if mime_type == "audio/alaw":
-        return pcm_to_wav_bytes(alaw_to_pcm16(raw), rate=rate)
-    return pcm_to_wav_bytes(raw, rate=rate)
+    return pcm_to_wav_bytes(raw, rate=24000)
+
 
 def generate_audio(client, model, input_blocks, speech_config, stream, mime_type, sample_rate):
     started = time.time()
-    fmt = response_format_for(stream, mime_type, sample_rate)
-    rate = int(sample_rate or 24000)
-    kwargs = {
-        "model": model,
-        "input": input_blocks,
-        "response_format": fmt,
-        "generation_config": {"speech_config": speech_config},
-        "safety_settings": INTERACTION_SAFETY_SETTINGS,
-    }
+    contents, config = input_blocks_to_generate_content(input_blocks, speech_config)
+
     if stream:
-        kwargs["stream"] = True
-        last_exc = None
-        dropped_safety = False
-        dropped_mode = False
-        for attempt in range(RETRY_ATTEMPTS):
-            try:
-                response = client.interactions.create(**kwargs)
-                chunks = []
-                for event in response:
-                    event_type = getattr(event, "event_type", None)
-                    if event_type in ("error", "interaction.error"):
-                        raise RuntimeError(f"خطای استریم: {getattr(event, 'error', event)}")
-                    if event_type == "step.delta":
-                        delta = getattr(event, "delta", None)
-                        if getattr(delta, "type", None) == "audio" and getattr(delta, "data", None):
-                            chunks.append(decode_b64(delta.data))
-                raw = b"".join(chunks)
-                if not raw:
-                    raise RuntimeError("استریم تمام شد اما داده صوتی نیامد.")
-                return raw_to_wav(raw, "audio/l16", rate), raw, time.time() - started
-            except Exception as exc:
-                last_exc = exc
-                low = str(exc).lower()
-                if not dropped_safety and safety_rejected(exc):
-                    kwargs.pop("safety_settings", None)
-                    dropped_safety = True
-                    continue
-                if not dropped_mode and ("mode" in low or "extra_forbidden" in low or "unknown field" in low):
-                    if drop_mode(kwargs):
-                        dropped_mode = True
-                        continue
-                if attempt == RETRY_ATTEMPTS - 1 or not is_retriable(exc):
-                    raise
-                time.sleep(RETRY_BASE_DELAY * (2 ** attempt))
-        raise last_exc
+        response_stream = create_with_retry(
+            client, model=model, contents=contents, config=config, stream=True
+        )
+        chunks = []
+        for chunk in response_stream:
+            data = _extract_inline_audio(chunk)
+            if data:
+                chunks.append(data)
+        raw = b"".join(chunks)
+        if not raw:
+            raise RuntimeError("استریم تمام شد اما داده صوتی دریافت نشد.")
+        return raw_to_wav(raw, "audio/l16", 24000), raw, time.time() - started
 
     try:
-        response = create_with_retry(client, **kwargs)
+        response = create_with_retry(
+            client, model=model, contents=contents, config=config, stream=False
+        )
     except Exception as exc:
         msg = str(exc).lower()
         if "content_blocked" in msg or "policy" in msg or "prohibited" in msg:
             raise RuntimeError(
-                "متن توسط فیلتر ایمنی Gemini مسدود شد. واژه‌ها را عوض کنید یا «نرم‌سازی واژه‌ها» را روشن کنید."
+                "متن توسط فیلتر ایمنی Gemini مسدود شد. واژه‌ها را بررسی کنید."
             ) from exc
         raise
-    raw = decode_b64(getattr(getattr(response, "output_audio", None), "data", None))
+
+    raw = _extract_inline_audio(response)
     if not raw:
-        raise RuntimeError("API پاسخی بدون داده صوتی برگرداند.")
-    return raw_to_wav(raw, mime_type, rate), raw, time.time() - started
+        candidates = getattr(response, "candidates", None) or []
+        reason = getattr(candidates[0], "finish_reason", None) if candidates else None
+        raise RuntimeError(f"API داده صوتی برنگرداند. finish_reason={reason}")
+    wav_data = raw if raw.startswith(b"RIFF") else pcm_to_wav_bytes(raw, rate=24000)
+    return wav_data, raw, time.time() - started
 
 def explain_error(exc):
     err = str(exc)
@@ -547,11 +575,11 @@ def explain_error(exc):
     if "429" in err or "rate" in low or "quota" in low:
         return "سقف درخواست پر شده است. کمی صبر کنید یا مدل lite را انتخاب کنید."
     if "404" in err or "not_found" in low:
-        return "مدل یا شناسه صدا پیدا نشد. voice_ را دوباره بسازید یا نام پیش‌ساخته را چک کنید."
+        return "مدل یا endpoint پیدا نشد. نام مدل و دسترسی GenerateContent را بررسی کنید."
     if "content_blocked" in low or "policy" in low:
         return "فیلتر ایمنی پاسخ را بست."
-    if "extra_forbidden" in low or "unknown field" in low:
-        return "یک فیلد درخواست با این نسخه از SDK سازگار نیست. حالت conversational را خاموش کنید."
+    if "invalid_argument" in low or "unknown field" in low or "extra_forbidden" in low:
+        return "ساختار درخواست GenerateContent با مدل یا نسخه SDK سازگار نیست. جزئیات فنی را بررسی کنید."
     if "safety" in low:
         return "تنظیمات ایمنی یا متن را تغییر دهید."
     return "کلید API، مدل و شناسه صدا را بررسی کنید."
@@ -636,9 +664,9 @@ with st.sidebar:
         "- `gemini-3.8-flash-tts` کیفیت بالاتر"
     )
     st.info(
-        "تک‌بلندگو: `speech_config` آرایه است.\n\n"
-        "چندبلندگو با صدای پیش‌ساخته: شیء `speakers`.\n\n"
-        "استریم پیش‌فرض PCM خام ۲۴ کیلوهرتز است و اینجا به WAV تبدیل می‌شود."
+        "تک‌بلندگو: `speechConfig.voiceConfig`.\n\n"
+        "چندبلندگو: `speechConfig.multiSpeakerVoiceConfig`.\n\n"
+        "خروجی عادی WAV و خروجی استریم PCM خام ۲۴ کیلوهرتز است."
     )
     st.markdown(
         "**برچسب داخل متن** (خوانده نمی‌شود، اجرا می‌شود)\n\n"
@@ -652,7 +680,7 @@ with st.sidebar:
         "هر نوبت جدا ساخته و بعد به هم وصل می‌شود. سقف ۲۰۰ صدای ذخیره‌شده، ماندگاری یک سال.\n\n"
         f"سقف ورودی هر درخواست **{INPUT_TOKEN_LIMIT:,}** توکن و سقف خروجی صوتی **{OUTPUT_TOKEN_LIMIT:,}** توکن است. "
         "مدل lite برای حجم بالا و تک‌گویی روزمره است؛ برای دیالوگ پیچیده و لهجه، flash را انتخاب کنید. "
-        "مدل‌های پیش‌نمایش ۲.۵ و ۳.۱ این طرح `speech_metadata` را ندارند."
+        "در این نسخه، تولید صوت از GenerateContent API انجام می‌شود؛ امکانات مدیریت صدا از Voices API استفاده می‌کنند."
     )
     if get_secret("TELEGRAM_BOT_TOKEN") and get_secret("TELEGRAM_CHAT_ID"):
         st.success("تلگرام پیکربندی شده")
@@ -1037,17 +1065,12 @@ with c2:
 with c3:
     streaming = st.checkbox("استریمینگ", value=False, help="تکه‌های PCM خام تا پایان جمع می‌شوند و یک WAV ساخته می‌شود.")
 
-mime_label = st.selectbox("فرمت API در حالت غیر استریم", list(MIME_TYPES), disabled=streaming)
-mime_type = MIME_TYPES[mime_label]
-sample_rate = st.selectbox(
-    "نرخ نمونه",
-    SAMPLE_RATES,
-    index=0,
-    format_func=lambda r: f"{r:,} Hz",
-    help="۲۴۰۰۰ پیش‌فرض سند است. در استریم، نرخ غیر از ۲۴۰۰۰ با mime_type برابر audio/l16 فرستاده می‌شود.",
+mime_type = "audio/l16" if streaming else "audio/wav"
+sample_rate = 24000
+st.caption(
+    "خروجی GenerateContent برای Gemini 3.8: WAV در حالت عادی و PCM خام ۲۴ کیلوهرتز در حالت استریم. "
+    "نرخ نمونه و کدک‌های تلفنی از این رابط در این نسخه تنظیم نمی‌شوند."
 )
-if mime_type in ("audio/mulaw", "audio/alaw") and sample_rate != 8000:
-    st.caption("برای تلفن، mu-law و A-law معمولاً ۸۰۰۰ هرتز هستند.")
 
 # ----------------------------- Transcript -----------------------------
 
@@ -1163,11 +1186,8 @@ else:
     if split_needed:
         st.info("حداقل یک صدا سفارشی است. نوبت‌ها جدا با audio/l16 ساخته و به یک WAV وصل می‌شوند.")
     else:
-        conversational = st.checkbox(
-            "افزودن mode: conversational",
-            value=False,
-            help="نمونه رسمی پایتون فقط speakers را می‌فرستد. این گزینه فیلد REST را هم اضافه می‌کند.",
-        )
+        conversational = False
+        st.caption("حالت چندگوینده با تنظیمات MultiSpeakerVoiceConfig در GenerateContent ارسال می‌شود.")
     with st.expander("قالب‌بندی شعر و دیالوگ", expanded=False):
         raw = st.text_area("متن خام", height=140, key="raw_multi")
         strategy_label = st.selectbox(
@@ -1261,18 +1281,20 @@ try:
 except ValueError as exc:
     preview_error = str(exc)
 
-with st.expander("شکل درخواست، مطابق سند", expanded=False):
+with st.expander("پیش‌نمایش درخواست GenerateContent", expanded=False):
     if split_custom:
-        st.write("هر خط یک درخواست تک‌بلندگو با `audio/l16` است و PCMها به هم وصل می‌شوند.")
+        st.write("هر نوبت یک درخواست تک‌بلندگو می‌شود؛ WAVها پس از تولید به هم متصل می‌شوند.")
     elif preview_error:
         st.warning(preview_error)
     elif preview_blocks is not None:
+        preview_contents, preview_generation_config = input_blocks_to_generate_content(
+            preview_blocks, preview_config
+        )
         st.json({
             "model": model,
-            "input": preview_blocks,
-            "response_format": response_format_for(streaming, mime_type, sample_rate),
-            "generation_config": {"speech_config": preview_config},
-            "stream": streaming,
+            "contents": preview_contents,
+            "generation_config": preview_generation_config,
+            "method": "generate_content_stream" if streaming else "generate_content",
         })
     else:
         st.caption("بعد از وارد کردن متن، بدنه درخواست اینجا دیده می‌شود.")
