@@ -5,6 +5,7 @@
 # streamlit run gemini_tts_studio.py
 import base64
 import io
+import json
 import re
 import time
 import traceback
@@ -108,6 +109,158 @@ TEXT_SAFETY_SETTINGS = [
     {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "OFF"},
     {"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": "OFF"},
     {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "OFF"},
+]
+
+# ----------------------------- Balochi poem data -----------------------------
+
+BALOCH_POEM_TITLE = {
+    "balochi": "او مڑا داریں بلوچ",
+    "transliteration": "O Mardaaren Baloch",
+    "translation": "ای بلوچ با غیرت و نامدار!",
+    "subtitle": "گالاں نصیرءِ گوش بدار (به سخنان نصیر گوش فراده)",
+    "poet": "میر گل خان نصیر (۱۹۱۴–۱۹۸۳) — ملک‌الشعرای بلوچستان",
+}
+
+BALOCH_VERSES = [
+    {"id": 1, "balochi": "او مڑا داریں بلوچ! او سرمَچنڈیں نامدار",
+     "transliteration": "O mardaaren Baloch! O sarmachand-en naamdaar",
+     "translation": "ای بلوچ با غیرت و دلاور! ای قهرمان نامدار و سربلند!",
+     "explanation": "فراخوانی پرشور به میراث اصیل و غیرت تاریخی مردم بلوچ.", "keywords": ["مڑا داریں", "سرمَچنڈیں", "نامدار"]},
+    {"id": 2, "balochi": "نشتگئے پرچے او ورنا ! تو چو بیواک و نکار",
+     "transliteration": "Nishtag-e parche o warnaa! Tu chu bay-waak o nakaar",
+     "translation": "چرا بیکار نشسته‌ای ای جوان! در ناتوانی و بی‌خاصیتی؟",
+     "explanation": "سرزنشی تند به سکون و بی‌عملی، فراخوان نسل جوان به رهایی از انفعال.", "keywords": ["ورنا", "بیواک", "نکار"]},
+    {"id": 3, "balochi": "بستگئے دستان وتی ، چماں تئی گِپتہ ھُمار",
+     "transliteration": "Bastag-e dastaan wati, chammaan tayi gepta humaar",
+     "translation": "دستان خودت را بسته‌ای و خواب و مستی چشمانت را فراگرفته است!",
+     "explanation": "شاعر تراژدی را تشخیص می‌دهد: نه کمبود نیرو، بلکه بستن دستان خویش و به خواب رفتن.", "keywords": ["دستان", "ھُمار"]},
+    {"id": 4, "balochi": "بوجی ءَ گندئے وتی بیتگ گوں توپان ءَ دچار",
+     "transliteration": "Boji-a gind-e wati baytag gon toofaan-a dochaar",
+     "translation": "کشتی چوبی خودت را می‌بینی که گرفتار توفان سهمگین شده است!",
+     "explanation": "استعارهٔ دریایی مکران: کشتی چوبی (بوجی) در میان امواج خروشان.", "keywords": ["بوجی", "توپان", "دچار"]},
+    {"id": 5, "balochi": "پاد کائنت چئول ،چو گٹیں گـَر و سبزیں تلار",
+     "transliteration": "Paad kayant chawool, chu gatt-en gar o sabz-en talaar",
+     "translation": "امواج سرکش مانند پرتگاه‌های ژرف و صخره‌های سبزفام به بالا می‌جهند!",
+     "explanation": "تصویری زنده از امواج عظیم دریا همچون پرتگاه‌های کوه و صخره‌های لغزنده.", "keywords": ["چئول", "گٹیں گـَر", "سبزیں تلار"]},
+    {"id": 6, "balochi": "بوجی ءَ نیستیں ،تئی مستیں زرءِ لاپ ءَ کرار",
+     "transliteration": "Boji-a nest-en, tayi mast-en zar-e laap-a qaraar",
+     "translation": "کشتی تو در دل دریای مست و خروشان هیچ آرام و قراری ندارد!",
+     "explanation": "دریا «مست» و سرکش وصف شده؛ هیچ پناهگاهی برای کشتی بی‌حرکت نیست.", "keywords": ["مستیں زر", "لاپ", "کرار"]},
+    {"id": 7, "balochi": "جمّراں بستہ دُهتوکی، گرئنداں گوں گوات ءَ آوار",
+     "transliteration": "Jammaraan basta dohtoki, grayndaan gon gwaath-a aawaar",
+     "translation": "ابرهای سنگین پرده‌های تیره بر آسمان کشیده‌اند؛ غرش رعد با زوزهٔ باد درآمیخته است!",
+     "explanation": "تاریکی و خفقان جوی که در آن باد و آذرخش و رعد به هم می‌آمیزند.", "keywords": ["جمّراں", "دُهتوکی", "گرئنداں", "آوار"]},
+    {"id": 8, "balochi": "دیر و بیگواہ انت تیاب و شپ سیاہ انت و تهار",
+     "transliteration": "Dair o bay-gwaah ant tayaab o shap siyaah ant o tahaar",
+     "translation": "ساحل دور و گم شده و شب سیاه و تاریک است!",
+     "explanation": "سرگشتگی کامل؛ در تاریک‌ترین نیمه‌شب، بندر دیده نمی‌شود.", "keywords": ["بیگواہ", "تیاب", "تہار"]},
+    {"id": 9, "balochi": "بد دلی زیبا نہ انت او دل مَتُرسین سَرمَچار",
+     "transliteration": "Bad-dilli zaybaa na-int, o dil ma-tursen sarmachaar",
+     "translation": "بزدلی زیبنده نیست! ای جنگجوی بی‌باک، دل خویش را نترسان!",
+     "explanation": "چرخش از ناامیدی به ایستادگی: مردان راستین هرگز ترس را به دل راه نمی‌دهند.", "keywords": ["بد دلی", "سَرمَچار", "مَتُرسین"]},
+    {"id": 10, "balochi": "یک کسانیں مُهلتے اے زندگی نئیتیں دو بار",
+     "transliteration": "Yak kasaan-en mohlat-e ay zindagee nayt-en do baar",
+     "translation": "زندگی مهلتی کوتاه است و هرگز دوباره داده نمی‌شود!",
+     "explanation": "فوریت وجودی: این تنها فرصت برای ایستادن و شرافتمندانه زیستن است.", "keywords": ["مُهلتے", "زندگی", "دو بار"]},
+    {"id": 11, "balochi": "باید انت بندئے سرینءَ نیں پہ جدّ و جُهد و کار",
+     "transliteration": "Baayad ant band-e sarin-a neyn pa jadd o johd o kaar",
+     "translation": "اکنون باید کمر برای تلاش و کوشش و کار ببندی!",
+     "explanation": "بستن کمر (سرین) کنایهٔ سنتی بلوچی برای آماده شدن برای نبرد و کار سخت است.", "keywords": ["سرین", "جدّ و جُهد", "کار"]},
+    {"id": 12, "balochi": "بئے گوں توپانءَ مُکابل، چِکّی تکدیرءِ مهار",
+     "transliteration": "Baye gon toofaan-a mukaabal, chekki takdeer-e mahaar",
+     "translation": "رو در روی توفان بایست و محکم افسار سرنوشت را بکش!",
+     "explanation": "رد جبرگرایی: سرنوشت یوغی منفعل نیست، بلکه افساری است که باید به دست خود گرفت.", "keywords": ["مُکابل", "تکدیرءِ مهار", "چِکّی"]},
+    {"id": 13, "balochi": "زندگی لئیبے بزان، پرواہ مکن، وهمءَ میار",
+     "transliteration": "Zindagee layb-e bazaan, parwaah ma-kan, wahm-a ma-yaar",
+     "translation": "زندگی را بازی‌ای جسورانه بدان؛ پروا مکن و وهم به دل میاور!",
+     "explanation": "زندگی را با روحیهٔ بی‌پروا بازی کن، نه با اضطراب‌های فلج‌کننده.", "keywords": ["لئیب", "پرواہ", "وهم"]},
+    {"id": 14, "balochi": "گوات و توپان و گِروک و گِرئندگاں ہِچّی مَچار",
+     "transliteration": "Gwaath o toofaan o giroak o grayndagaan hich-ee ma-chaar",
+     "translation": "باد زوزه‌کش و توفان و آذرخش و رعد را هیچ بشمار!",
+     "explanation": "کاستن از هراس بیرونی با قوت درونی و یقین روانی.", "keywords": ["گِروک", "گِرئندگاں", "هِچّی"]},
+    {"id": 15, "balochi": "آزمان پُرشیت، زمین جسکیت بلے، پرواہ مدار",
+     "transliteration": "Aazmaan porsheet, zameen jaskeet balay, parwaah ma-daar",
+     "translation": "اگر آسمان بشکافد و زمین بلرزد، باز هم پروا مکن!",
+     "explanation": "بی‌باکی رواقی در برابر سخت‌ترین سختی‌ها.", "keywords": ["آزمان پُرشیت", "زمین جسکیت", "پرواہ مدار"]},
+    {"id": 16, "balochi": "کل تئی وَهم و گمان ئنت ایش کہ گُرّنت چو نهار",
+     "transliteration": "Kull tayi wahm o gumaan ant eysh ke gurrant chu nahaar",
+     "translation": "همهٔ این هیولاهایی که چون درندگان می‌غرشند، تنها وهم و گمان خودت هستند!",
+     "explanation": "بینش روان‌شناختی: اشباح بیرونی تنها تا جایی قدرت دارند که ذهن تو ترس را فرامی‌خواند.", "keywords": ["وَهم و گمان", "گُرّنت", "نهار"]},
+    {"id": 17, "balochi": "هَکلش دئے دیر سِندنت شِنگ و شانگ و تار پَتار",
+     "transliteration": "Hakkl-esh day dair sindant shing o shaang o taar pataar",
+     "translation": "بر آنان فریاد بزن تا از هم بپاشند و تکه‌تکه و پراکنده شوند!",
+     "explanation": "صدای قاطع یقین، هراس‌های موهوم را به هیچ می‌شکند.", "keywords": ["هَکلش دئے", "شِنگ و شانگ", "تار پَتار"]},
+    {"id": 18, "balochi": "همت اش نیستن، تئی دیما بہ اوشتنت پِیْدْوار",
+     "transliteration": "Himmat-ish nest-en, tayi daymaa ba-oshtant paydwaar",
+     "translation": "آنان را یارای ایستادن در برابر پیشروی استوار تو نیست!",
+     "explanation": "ستم و سختی در برابر ارادهٔ ناگسستنی آدمی پژمرده می‌شود.", "keywords": ["همت", "اوشتنت", "پِیْدْوار"]},
+    {"id": 19, "balochi": "بُست او ورنا ! پہ زندءَ نیں پَتَی دستان مَچار",
+     "transliteration": "Bost o warnaa! Pa zind-a neyn patay dastaan ma-chaar",
+     "translation": "برخیز ای جوان! در این زندگی، با حسرت به دستان خالی منگر!",
+     "explanation": "بهانهٔ تهیدستی و ناتوانی را کنار بگذار؛ ارادهٔ انسان بزرگ‌ترین سرمایه است.", "keywords": ["بُست", "ورنا", "دستان"]},
+    {"id": 20, "balochi": "وت تئی دست انت بیلی بَھت و تکدیرءِ مهار",
+     "transliteration": "Wat tayi dast ant bayli baht o takdeer-e mahaar",
+     "translation": "ای یار، در دستان خود توست افسار اقبال و سرنوشت!",
+     "explanation": "پیام فلسفی بنیادین: تو خود نویسنده و فرماندهٔ سرنوشت خویشی.", "keywords": ["بیلی", "بَھت", "تکدیرءِ مهار"]},
+    {"id": 21, "balochi": "ڈڈ کَن ورنائیں دلءَ گالاں نصیرءِ گوش بدار",
+     "transliteration": "Dadd kan warnaa-en dil-a gaalaan Naseer-e gosh ba-daar",
+     "translation": "دل جوانت را پولادین کن و به سخنان نصیر گوش فراده:",
+     "explanation": "شاعر نام خود (تخلص) را در شعر می‌نشاند و وصیت جاودان خود را به نسل‌های آینده می‌سپارد.", "keywords": ["ڈڈ کَن", "دل", "نصیر", "گوش بدار"]},
+    {"id": 22, "balochi": "اے سیاهیں شپ نہ مانیت، نئے سیاهیں روزگار",
+     "transliteration": "Ay siyaah-en shap na maaneet, nay siyaah-en rozgaar",
+     "translation": "نه این شب تاریک خواهد ماند و نه این روزگار سیاه!",
+     "explanation": "سرود جاودانهٔ امید و پیروزی: تاریک‌ترین شب و ستمگرترین دوران ناگزیر به سپیده می‌رسد.", "keywords": ["سیاهیں شپ", "نہ مانیت", "سیاهیں روزگار"]},
+]
+
+BALOCH_GLOSSARY = [
+    {"word": "مڑا داریں", "transliteration": "Mardaaren", "meaning": "با غیرت، جوانمرد و صاحب همت"},
+    {"word": "سرمَچنڈیں", "transliteration": "Sarmachand-en", "meaning": "سربلند، قهرمان سرکش و بی‌باک"},
+    {"word": "سَرمَچار", "transliteration": "Sarmachaar", "meaning": "جان‌نثار، جنگجوی سرافراز"},
+    {"word": "بوجی", "transliteration": "Boji", "meaning": "قایق چوبی سنتی سواحل مکران"},
+    {"word": "چئول", "transliteration": "Chawool", "meaning": "موج کوبنده و خروشان دریا"},
+    {"word": "تلار", "transliteration": "Talaar", "meaning": "صخرهٔ بلند و دیوارهٔ سنگی"},
+    {"word": "مستیں زر", "transliteration": "Mast-en zar", "meaning": "دریای خروشان و سرکش (دریای عمان)"},
+    {"word": "دُهتوکی", "transliteration": "Dohtoki", "meaning": "چادر تیره و پردهٔ فراگیر آسمان"},
+    {"word": "تیاب", "transliteration": "Tayaab", "meaning": "ساحل و کنارهٔ دریا"},
+    {"word": "بندئے سرینءَ", "transliteration": "Band-e sarin-a", "meaning": "کمر بستن؛ آماده شدن برای کار و نبرد"},
+    {"word": "تکدیرءِ مهار", "transliteration": "Takdeer-e mahaar", "meaning": "افسار سرنوشت؛ به دست گرفتن تقدیر خود"},
+    {"word": "گِروک", "transliteration": "Giroak", "meaning": "درخشش آذرخش که ابرها را می‌شکافد"},
+    {"word": "گرئند", "transliteration": "Graynd", "meaning": "غرش رعد در کوه و دریا"},
+    {"word": "نهار", "transliteration": "Nahaar", "meaning": "درندهٔ غران، شیر یا جانور وحشی"},
+    {"word": "تار پَتار", "transliteration": "Taar pataar", "meaning": "تکه‌تکه و پراکنده شده"},
+    {"word": "ڈڈ کَن", "transliteration": "Dadd kan", "meaning": "پولادین و استوار کردن دل"},
+    {"word": "سیاهیں روزگار", "transliteration": "Siyaah-en rozgaar", "meaning": "دوران تاریک و ظلم و جور"},
+]
+
+BALOCH_VOICES = [
+    {"name": "Fenrir", "label": "Fenrir (بم و حماسی مردانه)",
+     "tone": "شاهری، باصلابت، طنین سینه و صدای دلاورانه",
+     "style": "Deep, heroic, stirring orator with resonant chest tone, reciting classical Balochi revolutionary poetry with emotional weight and solemn pride"},
+    {"name": "Charon", "label": "Charon (پیر دانا و راوی کهن)",
+     "tone": "استاد کهنسال و راوی تاریخ بلوچستان با وقار و هیبت",
+     "style": "Ancient epic bard declaiming against the howling storm, with deep sonorous projection and legendary gravitas"},
+    {"name": "Puck", "label": "Puck (ورنا و جوان پرشور)",
+     "tone": "جوان، جسور، شتابان و پرانرژی برای اشعار امید و خروش",
+     "style": "Urgent, impassioned, stirring revolutionary youth reciting verses with rapid cadence, conviction, and fearless energy"},
+    {"name": "Aoede", "label": "Aoede (بانوی نغمه‌خوان مکرانی)",
+     "tone": "گیرا، سوزناک و شاعرانه، نغمه‌سرایی لطیف زنانه",
+     "style": "Lyrical, emotive Balochi female bard reciting with soulful clarity, musical cadences, and poetic beauty"},
+    {"name": "Kore", "label": "Kore (آرام، نرم و شمرده)",
+     "tone": "صدای ملایم، آرام‌بخش و شمرده، مناسب آموزش و غزل‌های دلنشین",
+     "style": "Lyrical, emotive, rich poetic declamation with clear enunciation, dramatic pauses, and solemn grandeur"},
+    {"name": "Zephyr", "label": "Zephyr (متین و رادیویی)",
+     "tone": "صدای استوار، سنجیده، گوینده رادیویی و دانا",
+     "style": "Wise, steadfast, dignified poet elder reciting with rhythmic meter, calm authority, and unwavering conviction"},
+]
+
+BALOCH_STYLES = [
+    {"id": "epic", "label": "دکلمه حماسی شاهری", "prompt": "Passionate, heroic Balochi master poet declaiming with majestic cadence, rolling r, and rhythmic dignity"},
+    {"id": "zahirok", "label": "زهیروک و سوزناک", "prompt": "Sorrowful, deeply emotional Balochi zahirok lamentation style, melodic pauses, soulful breathing"},
+    {"id": "liko", "label": "نغمگی و لِیکو", "prompt": "Rhythmic, melodious Balochi liko chanting with musical cadence and flowing prosody"},
+    {"id": "clear", "label": "شمرده و آموزشی", "prompt": "Articulate, slow educational native Balochi reciter, precise vowels and retroflex consonants"},
+    {"id": "gentle", "label": "نجوای آرام و شبانه", "prompt": "Gentle, lyrical nocturnal Balochi poetry recitation with warm intimate tones and smooth transitions"},
+    {"id": "dialogue", "label": "مناظره و گفت‌وگو", "prompt": "Dramatic dialogue, sharp responsive theatrical delivery with dynamic emotional shifts"},
+    {"id": "festive", "label": "سرود شادمانی و جشن", "prompt": "Uplifting, joyous Balochi festive chant celebrating courage, unity, and bright dawn"},
 ]
 
 # ----------------------------- Utilities -----------------------------
@@ -417,6 +570,31 @@ def generate_text_with_retry(client, model, prompt):
             time.sleep(RETRY_BASE_DELAY * (2 ** attempt))
     raise last_exc
 
+def generate_balochi_json(client, system_instruction, user_prompt, primary="gemini-3.1-flash-lite", fallback="gemini-3.8-flash"):
+    """تولید متن بلوچی با مدل اصلی و fallback، سپس پارس خروجی JSON."""
+    last_exc = None
+    for model in (primary, fallback):
+        try:
+            config = {"safety_settings": TEXT_SAFETY_SETTINGS}
+            if system_instruction:
+                config["system_instruction"] = system_instruction
+            response = client.models.generate_content(
+                model=model,
+                contents=user_prompt,
+                config=config,
+            )
+            text = (response.text or "").strip()
+            if not text:
+                raise ValueError("پاسخ مدل خالی بود.")
+            match = re.search(r"\{[\s\S]*\}", text)
+            if match:
+                return json.loads(match.group(0))
+            return json.loads(text)
+        except Exception as exc:
+            last_exc = exc
+            continue
+    raise last_exc
+
 def build_single_input(text, voice, style):
     content_item = {"type": "text", "text": text}
     style = (style or "").strip()
@@ -678,6 +856,258 @@ for key, value in {
 }.items():
     if key not in st.session_state:
         st.session_state[key] = value
+
+# ----------------------------- Balochi section -----------------------------
+
+st.header("📜 بلوچی — شعر و دکلمه")
+st.caption("شعر «او مردارین بلوچ» از میر گل خان نصیر + سرودن، تحلیل و تقسیم چندصدایی متن بلوچی.")
+
+def _balochi_tts(text, voice_name, style_prompt, label):
+    """دکلمهٔ متن بلوچی با مدل TTS و نمایش نتیجه."""
+    try:
+        blocks, config = build_single_input(text.strip(), voice_name, style_prompt or "")
+        with st.spinner("در حال دکلمه..."):
+            wav, raw, took = generate_audio(
+                client, "gemini-3.8-flash-tts", blocks, config, False, "audio/wav", 24000
+            )
+        st.session_state.baloch_audio = {"wav": wav, "label": label}
+    except Exception as exc:
+        st.error(f"{exc}")
+        st.info(explain_error(exc))
+
+tab_read, tab_compose, tab_analyze, tab_tag = st.tabs(
+    ["خواندن شعر", "سرودن شعر", "تحلیل متن", "چندصدایی"]
+)
+
+# ---- خواندن شعر ----
+with tab_read:
+    st.markdown(
+        f"**{BALOCH_POEM_TITLE['balochi']}** — {BALOCH_POEM_TITLE['translation']}\n\n"
+        f"{BALOCH_POEM_TITLE['subtitle']} · {BALOCH_POEM_TITLE['poet']}"
+    )
+    c1, c2 = st.columns(2)
+    with c1:
+        voice_label = st.selectbox("صدا", [v["label"] for v in BALOCH_VOICES], key="baloch_voice")
+        sel_voice = next(v for v in BALOCH_VOICES if v["label"] == voice_label)
+    with c2:
+        style_label = st.selectbox("سبک دکلمه", [s["label"] for s in BALOCH_STYLES], key="baloch_style")
+        sel_style = next(s for s in BALOCH_STYLES if s["label"] == style_label)
+    st.caption("صدای انتخابی: " + sel_voice["tone"])
+
+    full_text = "\n".join(v["balochi"] for v in BALOCH_VERSES)
+    if st.button("🎧 خواندن کل شعر", type="primary", use_container_width=True, key="baloch_full"):
+        _balochi_tts(full_text, sel_voice["name"], sel_style["prompt"], "او مردارین بلوچ — دکلمه کامل")
+
+    verse_no = st.selectbox(
+        "بیت", range(1, len(BALOCH_VERSES) + 1),
+        format_func=lambda i: f"بیت {i}", key="baloch_verse_no",
+    )
+    verse = BALOCH_VERSES[verse_no - 1]
+    st.markdown(f"**{verse['balochi']}**")
+    st.caption(verse["transliteration"])
+    st.caption(verse["translation"])
+    if st.button("خواندن این بیت", use_container_width=True, key="baloch_verse_btn"):
+        _balochi_tts(verse["balochi"], sel_voice["name"], sel_style["prompt"], f"بیت {verse_no}")
+
+    with st.expander("متن کامل شعر (۲۲ بیت)"):
+        for v in BALOCH_VERSES:
+            st.markdown(f"**{v['id']}. {v['balochi']}**")
+            st.caption(v["transliteration"] + " — " + v["translation"])
+
+    with st.expander("واژه‌نامه بلوچی"):
+        for g in BALOCH_GLOSSARY:
+            st.markdown(f"**{g['word']}** ({g['transliteration']}) — {g['meaning']}")
+
+# ---- سرودن شعر ----
+with tab_compose:
+    st.caption("سرودن شعر اصیل بلوچی با Gemini (همراه آوانویسی و ترجمه فارسی).")
+    c1, c2 = st.columns(2)
+    with c1:
+        theme = st.text_input("موضوع", "دلیری و غیرت بلوچ", key="baloch_theme")
+        form = st.selectbox("قالب", ["غزل و دوبیتی حماسی", "دوبیتی", "رباعی", "غزل", "شعر آزاد"], key="baloch_form")
+    with c2:
+        dialect = st.selectbox("گویش", ["مکرانی", "رخشانی", "سرحدی", "لاشاری"], key="baloch_dialect")
+        mood = st.selectbox("حال‌وهوا", ["حماسی و انگیزشی", "سوزناک و عاشقانه", "امیدبخش", "حکیمانه"], key="baloch_mood")
+    verse_count = st.slider("تعداد بیت", 2, 12, 4, key="baloch_vcount")
+
+    if st.button("سرودن شعر", type="primary", use_container_width=True, key="baloch_compose_btn"):
+        system_instruction = (
+            "You are a renowned master Balochi poet and literary scholar. "
+            "Compose authentic, linguistically accurate Balochi poetry (not Persian/Urdu disguised as Balochi). "
+            "Follow traditional Balochi meter and rhyme; use traditional Arabic-Balochi script "
+            "(letters ݔ، ۏ، ئے، ء، ڈ، ٹ، ڑ). Provide precise Romanized phonetic transliteration for every verse, "
+            "a faithful Persian translation for each verse, and a literary explanation and vocabulary breakdown. "
+            "Output must be strictly valid JSON."
+        )
+        user_prompt = (
+            f"Compose an original Balochi poem:\n- Theme: {theme}\n- Form: {form}\n"
+            f"- Dialect: {dialect}\n- Mood: {mood}\n- Couplets: {verse_count}\n\n"
+            'Return JSON with schema: {"title": "...", "dialect": "...", '
+            '"verses": [{"balochi": "...", "transliteration": "...", "translation": "..."}], '
+            '"fullBalochiText": "...", "explanation": "...", '
+            '"vocabulary": [{"word": "...", "meaning": "..."}]}'
+        )
+        try:
+            with st.spinner("در حال سرودن..."):
+                st.session_state.baloch_poem = generate_balochi_json(client, system_instruction, user_prompt)
+        except Exception as exc:
+            st.error(f"سرودن ناموفق بود: {exc}")
+
+    poem = st.session_state.get("baloch_poem")
+    if poem:
+        st.subheader(poem.get("title", "شعر بلوچی"))
+        if poem.get("dialect"):
+            st.caption("گویش: " + str(poem["dialect"]))
+        verses = poem.get("verses") or []
+        for v in verses:
+            st.markdown(f"**{v.get('balochi', '')}**")
+            st.caption(v.get("transliteration", ""))
+            st.caption(v.get("translation", ""))
+        if poem.get("explanation"):
+            with st.expander("شرح ادبی"):
+                st.write(poem["explanation"])
+        vocab = poem.get("vocabulary") or []
+        if vocab:
+            with st.expander("واژه‌نامه"):
+                for item in vocab:
+                    st.markdown(f"**{item.get('word', '')}** — {item.get('meaning', '')}")
+        full = poem.get("fullBalochiText") or "\n".join(v.get("balochi", "") for v in verses)
+        if full and st.button("خواندن شعر سروده‌شده", use_container_width=True, key="baloch_compose_read"):
+            _balochi_tts(full, sel_voice["name"], sel_style["prompt"], "شعر سروده‌شده")
+
+# ---- تحلیل متن ----
+with tab_analyze:
+    st.caption("تحلیل متن بلوچی: آوانویسی، ترجمه فارسی، آماده‌سازی دکلمه و واژه‌نامه.")
+    analyze_text = st.text_area(
+        "متن بلوچی", height=160, key="baloch_analyze_text",
+        placeholder="متن یا شعر بلوچی را اینجا بچسبانید...",
+    )
+    if st.button("تحلیل متن", type="primary", use_container_width=True, key="baloch_analyze_btn"):
+        if not analyze_text.strip():
+            st.error("متن بلوچی را وارد کنید.")
+        else:
+            system_instruction = (
+                "You are a native Balochi literary scholar and phoneticist. "
+                "Analyze the provided Balochi text/poetry: parse it verse by verse; provide exact Romanized "
+                "phonetic transcription (long vowels, retroflex consonants); provide a Persian translation for "
+                "each verse; prepare an optimized recitation script; extract key vocabulary with Persian meanings. "
+                "Output strictly valid JSON."
+            )
+            user_prompt = (
+                "Analyze this Balochi poetry:\n\"\"\"\n" + analyze_text.strip() + "\n\"\"\"\n\n"
+                'Return JSON with schema: {"verses": [{"balochi": "...", "transliteration": "...", "translation": "..."}], '
+                '"optimizedRecitationText": "...", "phoneticGuide": "...", '
+                '"vocabulary": [{"word": "...", "meaning": "..."}]}'
+            )
+            try:
+                with st.spinner("در حال تحلیل..."):
+                    st.session_state.baloch_analysis = generate_balochi_json(client, system_instruction, user_prompt)
+            except Exception as exc:
+                st.error(f"تحلیل ناموفق بود: {exc}")
+
+    analysis = st.session_state.get("baloch_analysis")
+    if analysis:
+        verses = analysis.get("verses") or []
+        for v in verses:
+            st.markdown(f"**{v.get('balochi', '')}**")
+            st.caption(v.get("transliteration", ""))
+            st.caption(v.get("translation", ""))
+        if analysis.get("phoneticGuide"):
+            with st.expander("راهنمای تلفظ"):
+                st.write(analysis["phoneticGuide"])
+        vocab = analysis.get("vocabulary") or []
+        if vocab:
+            with st.expander("واژه‌نامه"):
+                for item in vocab:
+                    st.markdown(f"**{item.get('word', '')}** — {item.get('meaning', '')}")
+        recit = analysis.get("optimizedRecitationText") or analyze_text
+        if recit and st.button("خواندن متن تحلیل‌شده", use_container_width=True, key="baloch_analyze_read"):
+            _balochi_tts(recit, sel_voice["name"], sel_style["prompt"], "متن تحلیل‌شده")
+
+# ---- تقسیم چندصدایی ----
+with tab_tag:
+    st.caption("تقسیم خودکار شعر/متن بلوچی برای دکلمهٔ دو صدایی (راوی + جوان).")
+    tag_text = st.text_area(
+        "متن بلوچی", height=160, key="baloch_tag_text",
+        placeholder="شعر یا متن بلوچی را بچسبانید...",
+    )
+    if st.button("تقسیم چندصدایی", type="primary", use_container_width=True, key="baloch_tag_btn"):
+        if not tag_text.strip():
+            st.error("متن بلوچی را وارد کنید.")
+        else:
+            system_instruction = (
+                "You are an expert native Balochi theatrical director. Segment and tag the poem for 2 distinct "
+                "speakers for dramatic multi-speaker recitation. Assign each segment to spk1 (پیر/راوی, voice "
+                "Charon or Fenrir) or spk2 (جوان/ورنا, voice Puck or Aoede). For each segment provide id, speakerId, "
+                "speakerName, assignedVoice (one of Fenrir, Puck, Charon, Aoede, Kore, Zephyr), balochiText, "
+                "transliteration, translation, deliveryHint. Output strictly valid JSON."
+            )
+            user_prompt = (
+                "Partition and tag this Balochi poetry for 2 speakers:\n\"\"\"\n" + tag_text.strip() + "\n\"\"\"\n\n"
+                'Return JSON: {"speakers": [{"id": "spk1", "name": "...", "voice": "Charon"}, '
+                '{"id": "spk2", "name": "...", "voice": "Puck"}], '
+                '"segments": [{"id": "seg-1", "speakerId": "spk1", "assignedVoice": "Charon", '
+                '"balochiText": "...", "transliteration": "...", "translation": "...", "deliveryHint": "..."}]}'
+            )
+            try:
+                with st.spinner("در حال تقسیم..."):
+                    st.session_state.baloch_tag = generate_balochi_json(client, system_instruction, user_prompt)
+            except Exception as exc:
+                st.error(f"تقسیم ناموفق بود: {exc}")
+
+    tagged = st.session_state.get("baloch_tag")
+    if tagged:
+        speakers = tagged.get("speakers") or []
+        segs = tagged.get("segments") or []
+        if speakers:
+            st.markdown("**گوینده‌ها:** " + " · ".join(
+                f"{s.get('name', '')} ({s.get('voice', '')})" for s in speakers
+            ))
+        for seg in segs:
+            spk = seg.get("speakerName") or seg.get("speakerId") or "?"
+            st.markdown(f"**{spk}** — {seg.get('balochiText', '')}")
+            cap = seg.get("transliteration", "")
+            if seg.get("deliveryHint"):
+                cap += " — " + seg.get("deliveryHint", "")
+            st.caption(cap)
+        if segs and st.button("خواندن با دو گوینده", type="primary", use_container_width=True, key="baloch_tag_read"):
+            spk1_name = next((s.get("name") for s in speakers if s.get("id") == "spk1"), "راوی")
+            spk2_name = next((s.get("name") for s in speakers if s.get("id") == "spk2"), "جوان")
+            voice1 = next((s.get("voice") for s in speakers if s.get("id") == "spk1"), "Charon")
+            voice2 = next((s.get("voice") for s in speakers if s.get("id") == "spk2"), "Puck")
+            if spk1_name == spk2_name:
+                spk2_name = "جوان"
+            lines = []
+            for seg in segs:
+                sid = seg.get("speakerId") or "spk1"
+                who = spk1_name if sid == "spk1" else spk2_name
+                txt = seg.get("balochiText") or ""
+                if txt:
+                    lines.append(f"{who}: {txt}")
+            if not lines:
+                st.error("بخش‌بندی خالی بود.")
+            else:
+                try:
+                    blocks, config = build_multi_input(
+                        "\n".join(lines), spk1_name, spk2_name, voice1, voice2, "", ""
+                    )
+                    with st.spinner("در حال دکلمه..."):
+                        wav, raw, took = generate_audio(
+                            client, "gemini-3.8-flash-tts", blocks, config, False, "audio/wav", 24000
+                        )
+                    st.session_state.baloch_audio = {"wav": wav, "label": "دکلمه دو صدایی"}
+                except Exception as exc:
+                    st.error(f"{exc}")
+                    st.info(explain_error(exc))
+
+# نمایش خروجی صوتی بخش بلوچی (مشترک بین تب‌ها)
+if st.session_state.get("baloch_audio"):
+    st.audio(st.session_state.baloch_audio["wav"], format="audio/wav")
+    st.caption(st.session_state.baloch_audio.get("label", ""))
+    st.download_button(
+        "دانلود WAV", data=st.session_state.baloch_audio["wav"],
+        file_name="baloch.wav", mime="audio/wav", key="baloch_dl",
+    )
 
 # ----------------------------- Voice design -----------------------------
 
