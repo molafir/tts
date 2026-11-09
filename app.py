@@ -363,7 +363,8 @@ def split_multispeaker_lines(text, max_chars=3500):
     return chunks or [text.strip()]
 
 def build_client(api_key):
-    return genai.Client(api_key=api_key)
+    # مدل‌های TTS و صداها فقط تحت v1beta در دسترس‌اند؛ SDK 3.0 به‌طور پیش‌فرض v1 می‌زند.
+    return genai.Client(api_key=api_key, http_options={"api_version": "v1beta"})
 
 def is_retriable(exc):
     msg = str(exc).lower()
