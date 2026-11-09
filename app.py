@@ -71,7 +71,8 @@ VOICE_DESCRIPTIONS = {
 }
 MODELS = ["gemini-3.8-flash-lite-tts", "gemini-3.8-flash-tts"]
 MIME_TYPES = {
-    "WAV (پیشنهادی)": "audio/wav",
+    "MP3 (پیشنهادی)": "audio/mp3",
+    "WAV": "audio/wav",
     "PCM خطی L16": "audio/l16",
     "mu-law تلفنی": "audio/mulaw",
     "A-law تلفنی": "audio/alaw",
@@ -254,6 +255,7 @@ BALOCH_VOICES = [
 ]
 
 BALOCH_STYLES = [
+    {"id": "none", "label": "بدون سبک (فقط متن)", "prompt": ""},
     {"id": "epic", "label": "دکلمه حماسی شاهری", "prompt": "Passionate, heroic Balochi master poet declaiming with majestic cadence, rolling r, and rhythmic dignity"},
     {"id": "zahirok", "label": "زهیروک و سوزناک", "prompt": "Sorrowful, deeply emotional Balochi zahirok lamentation style, melodic pauses, soulful breathing"},
     {"id": "liko", "label": "نغمگی و لِیکو", "prompt": "Rhythmic, melodious Balochi liko chanting with musical cadence and flowing prosody"},
@@ -640,11 +642,20 @@ def raw_to_wav(raw, mime_type, sample_rate):
     rate = int(sample_rate or 24000)
     if raw.startswith(b"RIFF"):
         return raw
+    if mime_type == "audio/mp3":
+        return raw  # MP3 خودش قالب کامل دارد؛ بدون بسته‌بندی WAV
     if mime_type == "audio/mulaw":
         return pcm_to_wav_bytes(mulaw_to_pcm16(raw), rate=rate)
     if mime_type == "audio/alaw":
         return pcm_to_wav_bytes(alaw_to_pcm16(raw), rate=rate)
     return pcm_to_wav_bytes(raw, rate=rate)
+
+def audio_st_format(mime_type):
+    """قالب پخش در استریم‌لیت: MP3 یا WAV (بقیه به WAV تبدیل شده‌اند)."""
+    return "audio/mp3" if mime_type == "audio/mp3" else "audio/wav"
+
+def audio_file_ext(mime_type):
+    return "mp3" if mime_type == "audio/mp3" else "wav"
 
 def generate_audio(client, model, input_blocks, speech_config, stream, mime_type, sample_rate):
     started = time.time()
@@ -867,56 +878,60 @@ def _balochi_tts(text, voice_name, style_prompt, label):
     try:
         blocks, config = build_single_input(text.strip(), voice_name, style_prompt or "")
         with st.spinner("در حال دکلمه..."):
-            wav, raw, took = generate_audio(
-                client, "gemini-3.8-flash-tts", blocks, config, False, "audio/wav", 24000
+            audio, raw, took = generate_audio(
+                client, "gemini-3.8-flash-tts", blocks, config, False, "audio/mp3", 24000
             )
-        st.session_state.baloch_audio = {"wav": wav, "label": label}
+        st.session_state.baloch_audio = {"audio": audio, "label": label, "mime": "audio/mp3"}
     except Exception as exc:
         st.error(f"{exc}")
         st.info(explain_error(exc))
 
-tab_read, tab_compose, tab_analyze, tab_tag = st.tabs(
-    ["خواندن شعر", "سرودن شعر", "تحلیل متن", "چندصدایی"]
+# انتخاب صدا و سبک (مشترک بین همهٔ بخش‌ها)
+c1, c2 = st.columns(2)
+with c1:
+    voice_label = st.selectbox("صدا", [v["label"] for v in BALOCH_VOICES], key="baloch_voice")
+    sel_voice = next(v for v in BALOCH_VOICES if v["label"] == voice_label)
+with c2:
+    style_label = st.selectbox("سبک دکلمه", [s["label"] for s in BALOCH_STYLES], key="baloch_style")
+    sel_style = next(s for s in BALOCH_STYLES if s["label"] == style_label)
+st.caption("صدای انتخابی: " + sel_voice["tone"])
+
+# ---- خواندن متن دلخواه (اصلی) ----
+st.subheader("خواندن متن دلخواه")
+custom_text = st.text_area(
+    "متن بلوچی", key="baloch_custom_text", height=180,
+    placeholder="هر شعر یا متن بلوچی را اینجا بچسبانید؛ دقیقاً همین متن خوانده می‌شود.",
 )
+b_read, b_full, b_verse = st.columns(3)
+if b_read.button("🎧 خواندن همین متن", type="primary", use_container_width=True, key="baloch_read_custom"):
+    if custom_text.strip():
+        _balochi_tts(custom_text, sel_voice["name"], sel_style["prompt"], "متن دلخواه")
+    else:
+        st.warning("متن بلوچی را وارد کنید.")
+if b_full.button("نمونه: کل شعر نصیر", use_container_width=True, key="baloch_load_full"):
+    st.session_state.baloch_custom_text = "\n".join(v["balochi"] for v in BALOCH_VERSES)
+    st.rerun()
+if b_verse.button("نمونه: یک بیت", use_container_width=True, key="baloch_load_verse"):
+    st.session_state.baloch_custom_text = BALOCH_VERSES[0]["balochi"]
+    st.rerun()
 
-# ---- خواندن شعر ----
-with tab_read:
-    st.markdown(
-        f"**{BALOCH_POEM_TITLE['balochi']}** — {BALOCH_POEM_TITLE['translation']}\n\n"
-        f"{BALOCH_POEM_TITLE['subtitle']} · {BALOCH_POEM_TITLE['poet']}"
+# نمایش خروجی صوتی بخش بلوچی
+if st.session_state.get("baloch_audio"):
+    bal = st.session_state.baloch_audio
+    mime = bal.get("mime", "audio/mp3")
+    st.audio(bal["audio"], format=audio_st_format(mime))
+    st.caption(bal.get("label", ""))
+    st.download_button(
+        "دانلود " + audio_file_ext(mime).upper(),
+        data=bal["audio"],
+        file_name="baloch." + audio_file_ext(mime),
+        mime=mime,
+        key="baloch_dl",
     )
-    c1, c2 = st.columns(2)
-    with c1:
-        voice_label = st.selectbox("صدا", [v["label"] for v in BALOCH_VOICES], key="baloch_voice")
-        sel_voice = next(v for v in BALOCH_VOICES if v["label"] == voice_label)
-    with c2:
-        style_label = st.selectbox("سبک دکلمه", [s["label"] for s in BALOCH_STYLES], key="baloch_style")
-        sel_style = next(s for s in BALOCH_STYLES if s["label"] == style_label)
-    st.caption("صدای انتخابی: " + sel_voice["tone"])
 
-    full_text = "\n".join(v["balochi"] for v in BALOCH_VERSES)
-    if st.button("🎧 خواندن کل شعر", type="primary", use_container_width=True, key="baloch_full"):
-        _balochi_tts(full_text, sel_voice["name"], sel_style["prompt"], "او مردارین بلوچ — دکلمه کامل")
-
-    verse_no = st.selectbox(
-        "بیت", range(1, len(BALOCH_VERSES) + 1),
-        format_func=lambda i: f"بیت {i}", key="baloch_verse_no",
-    )
-    verse = BALOCH_VERSES[verse_no - 1]
-    st.markdown(f"**{verse['balochi']}**")
-    st.caption(verse["transliteration"])
-    st.caption(verse["translation"])
-    if st.button("خواندن این بیت", use_container_width=True, key="baloch_verse_btn"):
-        _balochi_tts(verse["balochi"], sel_voice["name"], sel_style["prompt"], f"بیت {verse_no}")
-
-    with st.expander("متن کامل شعر (۲۲ بیت)"):
-        for v in BALOCH_VERSES:
-            st.markdown(f"**{v['id']}. {v['balochi']}**")
-            st.caption(v["transliteration"] + " — " + v["translation"])
-
-    with st.expander("واژه‌نامه بلوچی"):
-        for g in BALOCH_GLOSSARY:
-            st.markdown(f"**{g['word']}** ({g['transliteration']}) — {g['meaning']}")
+tab_compose, tab_analyze, tab_tag, tab_ref = st.tabs(
+    ["سرودن شعر", "تحلیل متن", "چندصدایی", "شعر نصیر (مرجع)"]
+)
 
 # ---- سرودن شعر ----
 with tab_compose:
@@ -1092,22 +1107,26 @@ with tab_tag:
                         "\n".join(lines), spk1_name, spk2_name, voice1, voice2, "", ""
                     )
                     with st.spinner("در حال دکلمه..."):
-                        wav, raw, took = generate_audio(
-                            client, "gemini-3.8-flash-tts", blocks, config, False, "audio/wav", 24000
+                        audio, raw, took = generate_audio(
+                            client, "gemini-3.8-flash-tts", blocks, config, False, "audio/mp3", 24000
                         )
-                    st.session_state.baloch_audio = {"wav": wav, "label": "دکلمه دو صدایی"}
+                    st.session_state.baloch_audio = {"audio": audio, "label": "دکلمه دو صدایی", "mime": "audio/mp3"}
                 except Exception as exc:
                     st.error(f"{exc}")
                     st.info(explain_error(exc))
 
-# نمایش خروجی صوتی بخش بلوچی (مشترک بین تب‌ها)
-if st.session_state.get("baloch_audio"):
-    st.audio(st.session_state.baloch_audio["wav"], format="audio/wav")
-    st.caption(st.session_state.baloch_audio.get("label", ""))
-    st.download_button(
-        "دانلود WAV", data=st.session_state.baloch_audio["wav"],
-        file_name="baloch.wav", mime="audio/wav", key="baloch_dl",
+# ---- شعر نصیر (مرجع) ----
+with tab_ref:
+    st.markdown(
+        f"**{BALOCH_POEM_TITLE['balochi']}** — {BALOCH_POEM_TITLE['translation']}\n\n"
+        f"{BALOCH_POEM_TITLE['subtitle']} · {BALOCH_POEM_TITLE['poet']}"
     )
+    for v in BALOCH_VERSES:
+        st.markdown(f"**{v['id']}. {v['balochi']}**")
+        st.caption(v["transliteration"] + " — " + v["translation"])
+    with st.expander("واژه‌نامه بلوچی"):
+        for g in BALOCH_GLOSSARY:
+            st.markdown(f"**{g['word']}** ({g['transliteration']}) — {g['meaning']}")
 
 # ----------------------------- Voice design -----------------------------
 
@@ -1739,7 +1758,13 @@ if st.button("🎧 تولید صدا", type="primary", use_container_width=True,
             raw_parts.append(raw)
             elapsed += took
         progress.progress(1.0, text="آماده")
-        merged = wav_parts[0] if len(wav_parts) == 1 else join_wavs(wav_parts)
+        playable_mime = "audio/mp3" if (mime_type == "audio/mp3" and not streaming) else "audio/wav"
+        if len(wav_parts) == 1:
+            merged = wav_parts[0]
+        elif playable_mime == "audio/mp3":
+            merged = b"".join(wav_parts)
+        else:
+            merged = join_wavs(wav_parts)
         label = f"{mode} · {model} · {sample_rate} Hz · {len(sent)} کاراکتر · {elapsed:.1f}s"
         st.session_state.last_result = {
             "wav": merged,
@@ -1747,8 +1772,9 @@ if st.button("🎧 تولید صدا", type="primary", use_container_width=True,
             "raw_mime": jobs[0][3] if len(jobs) == 1 and not streaming else None,
             "label": label,
             "sent": sent,
+            "playable_mime": playable_mime,
         }
-        st.session_state.history.insert(0, {"wav": merged, "label": label})
+        st.session_state.history.insert(0, {"wav": merged, "label": label, "playable_mime": playable_mime})
         st.session_state.history = st.session_state.history[:HISTORY_LIMIT]
         if send_telegram:
             ok, msg = send_to_telegram(merged, "gemini-tts.wav", label)
@@ -1761,10 +1787,12 @@ if st.button("🎧 تولید صدا", type="primary", use_container_width=True,
 
 result = st.session_state.last_result
 if result and result.get("wav"):
+    playable_mime = result.get("playable_mime", "audio/wav")
+    ext = audio_file_ext(playable_mime)
     st.success("صدا آماده است.")
-    st.audio(result["wav"], format="audio/wav")
+    st.audio(result["wav"], format=audio_st_format(playable_mime))
     d1, d2 = st.columns(2)
-    d1.download_button("دانلود WAV", data=result["wav"], file_name="gemini-tts.wav", mime="audio/wav", use_container_width=True)
+    d1.download_button(f"دانلود {ext.upper()}", data=result["wav"], file_name=f"gemini-tts.{ext}", mime=playable_mime, use_container_width=True)
     raw_mime = result.get("raw_mime")
     if result.get("raw") and raw_mime in RAW_EXT:
         d2.download_button(
@@ -1776,18 +1804,20 @@ if result and result.get("wav"):
         )
     st.caption(result["label"])
     if telegram_ready and st.button("ارسال همین فایل به تلگرام"):
-        ok, msg = send_to_telegram(result["wav"], "gemini-tts.wav", result["label"])
+        ok, msg = send_to_telegram(result["wav"], f"gemini-tts.{ext}", result["label"])
         (st.success if ok else st.error)(msg)
 
 if st.session_state.history:
     st.subheader("تاریخچه این نشست")
     for i, item in enumerate(st.session_state.history):
+        pm = item.get("playable_mime", "audio/wav")
+        ext = audio_file_ext(pm)
         st.caption(item["label"])
-        st.audio(item["wav"], format="audio/wav")
+        st.audio(item["wav"], format=audio_st_format(pm))
         st.download_button(
             "دانلود",
             data=item["wav"],
-            file_name=f"gemini-tts-{i + 1}.wav",
-            mime="audio/wav",
+            file_name=f"gemini-tts-{i + 1}.{ext}",
+            mime=pm,
             key=f"hist_dl_{i}",
         )
